@@ -9,9 +9,18 @@ import type { MockKey } from "./mock/keys";
 
 export type ApiErrorKind = "network" | "timeout" | "server" | "not_found" | "conflict" | "bad_request";
 
+/**
+ * 서버가 응답 본문에 넣어 주는 오류 코드. 같은 kind(예: not_found) 안에서 상황을 나눌 때 쓴다.
+ * - draft_not_found: 이어 쓰던 임시 저장이 없거나 이미 저장됨 (POST /records/free/draft, 404)
+ * 모르는 코드도 그대로 받는다 (서버가 코드를 늘려도 화면이 깨지지 않게).
+ */
+export type ApiErrorCode = "draft_not_found" | (string & {});
+
 export interface ApiError {
   kind: ApiErrorKind;
   status?: number;
+  /** 응답 본문의 오류 코드. 없으면 undefined */
+  code?: ApiErrorCode;
   /** 화면에 그대로 보여도 되는 쉬운 문구 (화면에서 상황에 맞게 바꿔도 됨) */
   message: string;
 }
@@ -40,8 +49,33 @@ export const errorMessages: Record<ApiErrorKind, string> = {
   bad_request: "입력을 확인해 주세요",
 };
 
-export function apiError(kind: ApiErrorKind, status?: number): ApiError {
-  return { kind, status, message: errorMessages[kind] };
+export function apiError(kind: ApiErrorKind, status?: number, code?: ApiErrorCode): ApiError {
+  return { kind, status, ...(code ? { code } : {}), message: errorMessages[kind] };
+}
+
+const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * 오류 응답 본문에서 오류 코드를 꺼낸다. 받는 모양:
+ *   { "code": "draft_not_found" }
+ *   { "detail": { "code": "draft_not_found" } }   (FastAPI HTTPException(detail={...}))
+ *   { "detail": "draft_not_found" }               (FastAPI HTTPException(detail="..."))
+ *   { "error": { "code": "draft_not_found" } }
+ * 코드 모양(snake_case)이 아닌 문장·검사 오류 목록은 무시한다.
+ */
+export function readErrorCode(text: string): ApiErrorCode | undefined {
+  if (!text) return undefined;
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as { code?: unknown; detail?: unknown; error?: unknown };
+  const pick = (v: unknown) => (typeof v === "string" && ERROR_CODE_PATTERN.test(v) ? v : undefined);
+  const codeOf = (v: unknown) => (v && typeof v === "object" ? pick((v as { code?: unknown }).code) : undefined);
+  return pick(b.code) ?? codeOf(b.detail) ?? pick(b.detail) ?? codeOf(b.error);
 }
 
 function kindFromStatus(status: number): ApiErrorKind {
@@ -90,7 +124,10 @@ export async function request<T>(options: RequestOptions): Promise<ApiResult<T>>
       signal: controller.signal,
     });
 
-    if (!res.ok) return { ok: false, error: apiError(kindFromStatus(res.status), res.status) };
+    if (!res.ok) {
+      const code = readErrorCode(await res.text().catch(() => ""));
+      return { ok: false, error: apiError(kindFromStatus(res.status), res.status, code) };
+    }
 
     const text = await res.text();
     return parseJson<T>(text, res.status);

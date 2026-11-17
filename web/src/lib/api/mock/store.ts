@@ -22,6 +22,7 @@ export function newId(): Uuid {
 
 const now = () => new Date().toISOString();
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
 const topics: Topic[] = TOPIC_NAMES.map((name, i) => ({ id: i + 1, name, sort_order: i + 1 }));
 export const topicId = (name: (typeof TOPIC_NAMES)[number]) => topics.find((t) => t.name === name)!.id;
@@ -82,6 +83,9 @@ function seedRecord(partial: Partial<RecordItem> & Pick<RecordItem, "id" | "type
     created_at: daysAgo(3),
     saved_at: daysAgo(3),
     updated_at: daysAgo(3),
+    checkpoint_seq: null,
+    checkpoint_pending_id: null,
+    checkpoint_at: null,
     ...partial,
   };
 }
@@ -115,6 +119,8 @@ export interface MockDb {
   suggestion: SuggestionCard | null;
   nextRequestId: number;
   userStarted: boolean;
+  /** 중복 저장 막기: save_token → 저장된 기록 id (목록 17번 ⑨) */
+  saveTokens: Record<string, Uuid>;
 }
 
 function createDb(): MockDb {
@@ -128,6 +134,20 @@ function createDb(): MockDb {
   const pendingFailed = seedRecord({ id: "rec-pending-failed", type: "free", title: "회의 끝나고", body: "회의가 끝나고 한참 창밖만 봤다.", analysis_status: "failed" });
   const rawOnly = seedRecord({ id: "rec-raw-only", type: "free", title: "아무 일 없던 일요일", body: "하루 종일 집에 있었다.", analysis_status: "empty", original_kept_at: daysAgo(4) });
   const draftFree = seedRecord({ id: "rec-draft-free", type: "free", title: null, body: "오늘 아침에", status: "draft", analysis_status: "none", saved_at: null, updated_at: daysAgo(0) });
+  // AI 문답 임시 저장 (H121 확인용): 답변 2개 + 답을 기다리는 질문 1개에서 임시 저장
+  const draftQnaAt = minutesAgo(10);
+  const draftQna = seedRecord({
+    id: "rec-draft-qna",
+    type: "qna",
+    status: "draft",
+    analysis_status: "none",
+    created_at: minutesAgo(20),
+    saved_at: null,
+    updated_at: draftQnaAt,
+    checkpoint_seq: 3,
+    checkpoint_pending_id: "msg-draft-3",
+    checkpoint_at: draftQnaAt,
+  });
 
   return {
     topics,
@@ -137,10 +157,13 @@ function createDb(): MockDb {
       seq: i + 1,
       question,
     })),
-    records: [r1, r2, r3, pendingReview, pendingEmpty, pendingFailed, rawOnly, draftFree],
+    records: [r1, r2, r3, pendingReview, pendingEmpty, pendingFailed, rawOnly, draftFree, draftQna],
     messages: [
       { id: "msg-sample-1", record_id: r3.id, seq: 1, question: DAILY_QUESTION_TEXTS[0], question_source: "daily", daily_question_id: null, answer: "이사 첫날 밤 엄마와 통화한 장면이요.", is_replaced: false },
       { id: "msg-sample-2", record_id: r3.id, seq: 2, question: "그때 어떤 이야기를 나눴나요?", question_source: "followup", daily_question_id: null, answer: "밥은 먹었냐고, 문단속 잘하라고 하셨어요.", is_replaced: false },
+      { id: "msg-draft-1", record_id: draftQna.id, seq: 1, question: DAILY_QUESTION_TEXTS[2], question_source: "daily", daily_question_id: `dq-${today}-3`, answer: "동네 도서관 창가 자리요.", is_replaced: false },
+      { id: "msg-draft-2", record_id: draftQna.id, seq: 2, question: FOLLOWUP_QUESTIONS[0], question_source: "followup", daily_question_id: null, answer: "혼자 갔어요. 조용한 게 좋아서요.", is_replaced: false },
+      { id: "msg-draft-3", record_id: draftQna.id, seq: 3, question: FOLLOWUP_QUESTIONS[1], question_source: "followup", daily_question_id: null, answer: null, is_replaced: false },
     ],
     materials: [
       seedMaterial({ id: "mat-sample-1", record_id: r1.id, title: "혼자 아팠던 날", summary: "아플 때 전화로 들은 엄마의 레시피", evidence: "엄마가 전화로 죽 끓이는 법을 알려 줬다.", keywords: ["감기", "엄마", "죽"], topic_ids: [topicId("가족"), topicId("몸·건강")], used_count: 1, created_at: daysAgo(1) }),
@@ -166,6 +189,7 @@ function createDb(): MockDb {
     },
     nextRequestId: 1,
     userStarted: false,
+    saveTokens: {},
   };
 }
 
@@ -181,10 +205,14 @@ export function resetDb() {
   db = createDb();
 }
 
-/** 모든 기록 지우기 목업: 기록·소재·제안은 비우고 주제·오늘의 질문은 남김 (ERD 규칙 14) */
+/**
+ * 모든 기록 지우기 목업: 기록(진행 중 active·임시 저장 draft·저장 saved 모두)·소재·제안은 비우고
+ * 주제·오늘의 질문은 남김 (ERD 규칙 14)
+ */
 export function clearUserData() {
   const d = getDb();
   d.records = [];
+  d.saveTokens = {};
   d.messages = [];
   d.materials = [];
   d.analyses = {};

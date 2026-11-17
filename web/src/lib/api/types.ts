@@ -2,6 +2,7 @@
  * 서버와 주고받는 데이터 모양.
  * 기준: ERD v7 + docs/v6_이후_수정대기목록.md (목록이 우선). 칸 이름은 FastAPI·DB와 같은 snake_case.
  * - 목록 13·15번 (합의): events.share_method = copy / share_sheet. 취소·실패는 기록 안 함(share_result 칸 없음)
+ * - 목록 17번 (합의): records.status에 active(진행 중) 추가, 이어 쓰기 기준점(checkpoint_*), 중복 저장 막기(save_token)
  * - 목록 7번 (전달됨, 답 대기): materials.updated_at → 합의되면 Material에 추가
  * - 목록 16번 (전달됨, 답 대기): 서버 구조. 아래 '응답 묶음' 모양(HomeSummary 등)은 A의 임시안
  */
@@ -36,7 +37,11 @@ export interface Topic {
 /* ---------- 원본 기록 · AI 문답 ---------- */
 
 export type RecordType = "free" | "qna";
-export type RecordStatus = "draft" | "saved";
+/**
+ * active: AI 문답 진행 중 (첫 답변 때 만들어짐, 임시 저장 전) / draft: 임시 저장 / saved: 저장 (목록 17번)
+ * 자유 기록은 active를 쓰지 않는다.
+ */
+export type RecordStatus = "active" | "draft" | "saved";
 export type AnalysisStatus = "none" | "analyzing" | "done" | "empty" | "failed";
 
 export interface RecordItem {
@@ -50,7 +55,16 @@ export interface RecordItem {
   original_kept_at: IsoTime | null;
   created_at: IsoTime;
   saved_at: IsoTime | null;
+  /** 마지막 활동. 문답이 추가되거나 바뀌면 갱신 → 1시간 이어 쓰기 기준 (목록 17번 ⑥) */
   updated_at: IsoTime;
+  /**
+   * 이어 쓰기 기준점 (AI 문답 임시 저장 때 기록, 목록 17번 ⑤).
+   * 되돌리기 = seq > checkpoint_seq 삭제 + checkpoint_pending_id 질문의 answer = null, is_replaced = false
+   */
+  checkpoint_seq: number | null;
+  /** 임시 저장 때 답을 기다리던 질문 id (없었으면 null) */
+  checkpoint_pending_id: Uuid | null;
+  checkpoint_at: IsoTime | null;
 }
 
 export interface DailyQuestion {
@@ -73,10 +87,17 @@ export interface QnaMessage {
   is_replaced: boolean;
 }
 
-/** 이어 쓰기 확인(H121)용: 방식별 임시 저장 1개 */
-export interface RecordDraft {
+/**
+ * 진행 중 문답(GET /qna/active) · 임시 저장 문답(GET /qna/draft) 불러오기
+ */
+export interface QnaSession {
   record: RecordItem;
+  /** 바꾼 질문(is_replaced)도 포함, seq 순 */
   messages: QnaMessage[];
+  /** 답을 기다리는 질문. 없으면 null (AI 실패로 다음 질문을 못 받았거나, 답변 7개를 다 채움) */
+  pending: QnaMessage | null;
+  /** [다른 질문 보기] 남은 횟수 */
+  remaining_replaces: number;
 }
 
 /** AI 문답 규칙 (ERD 데이터 규칙 10) */
@@ -88,13 +109,17 @@ export const QNA_RULES = {
 } as const;
 
 export interface QnaAnswerResult {
+  /** 저장된 답변 (AI가 실패해도 답변은 저장됨) */
   answered: QnaMessage;
-  /** 다음 후속 질문. 답변 7개가 차면 null (질문 마무리 W212) */
+  /** 다음 후속 질문. 답변 7개가 찼거나(finished) AI가 실패하면(next_failed) null */
   next: QnaMessage | null;
+  /** 다음 질문 만들기 실패 → POST /qna/{id}/next 로 다시 받는다 (목록 17번 ⑦) */
+  next_failed: boolean;
+  /** 답변 7개가 참 (질문 마무리 W212) */
   finished: boolean;
 }
 
-/** 첫 답변 결과: 이때 문답 기록이 처음 만들어진다 (목록 17번, 방법 A) */
+/** 첫 답변 결과: 이때 문답 기록(status = active)이 처음 만들어진다 (목록 17번 ②) */
 export interface QnaFirstAnswerResult extends QnaAnswerResult {
   record: RecordItem;
   /** [다른 질문 보기] 남은 횟수 (처음 6) */
@@ -105,6 +130,11 @@ export interface QnaFirstAnswerResult extends QnaAnswerResult {
 export interface QnaReplaceResult {
   message: QnaMessage;
   remaining: number;
+}
+
+/** 다음 질문 다시 받기 결과 (POST /qna/{id}/next) */
+export interface QnaNextResult {
+  message: QnaMessage;
 }
 
 /* ---------- 소재 ---------- */
@@ -162,7 +192,7 @@ export type PendingCardStatus = "review" | "analyzing" | "empty" | "failed";
 export interface MaterialsOverview {
   /** 확인 대기 (ERD 규칙 4) */
   pending: { record: RecordItem; card_status: PendingCardStatus }[];
-  /** 임시 저장 기록 (방식별 1개) */
+  /** 임시 저장 기록 (방식별 1개). 진행 중(active)은 넣지 않음 */
   drafts: RecordItem[];
   /** 보관 확정 소재 */
   kept: Material[];

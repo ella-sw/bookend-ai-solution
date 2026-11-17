@@ -23,3 +23,11 @@ export const ANALYSIS_GRACE_MS = 10_000;
 
 /** 분석 상태를 다시 물어보는 간격 */
 export const ANALYSIS_POLL_MS = 1_500;
+
+/**
+ * AI 문답 이어 쓰기 기준 시간 (목록 17번 ⑥). 기준은 records.updated_at(마지막 활동).
+ * - GET /qna/active: 이보다 오래된 진행 중(active) 문답은 지우고 null
+ * - GET /qna/draft: 이보다 오래된 임시 저장(draft)은 기준점으로 되돌림
+ * 판단은 서버가 한다. 목업은 /dev/mock 에서 짧게 바꿔 시험할 수 있다.
+ */
+export const QNA_RESUME_WINDOW_MS = 60 * 60 * 1000;
