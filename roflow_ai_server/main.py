@@ -43,6 +43,15 @@ class ExtractRequest(BaseModel):
 def extract_material(req: ExtractRequest):
     system_prompt = """
     당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
+
+    [절대 규칙]
+    1. 팩트 유지: 원문에 없는 감정(예: 자신감 등)을 지어내거나, 사건의 장소나 순서를 절대 바꾸지 마세요. 중심 소재가 아닌 단순 배경 요소(예: 마시던 커피 등)는 키워드에서 제외하세요.
+    2. 근거 문장(evidence): 요약된 내용에 감정이 포함되어 있다면, 단편적인 행동만 발췌하지 말고 감정과 심리 상태가 드러난 원문 문장도 반드시 함께 발췌하세요.
+    3. 주제(topic_ids) 엄격 분류:
+       - '관계': 인물 간의 유대, 갈등, 관계의 변화가 중심일 때만 선택하세요. (단순한 일회성 친절이나 감사 표현만 있는 경우는 제외)
+       - '취향·취미': 해당 활동이나 선호 자체가 글의 중심 소재일 때만 선택하세요. (단순히 좋아하는 활동이 배경으로 등장한 경우는 제외)
+       - 반드시 다음 10개 중 1개 이상을 선택하세요: [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
+
     반드시 아래 JSON 형식으로만 응답하세요. 다른 말은 덧붙이지 마세요.
     {
         "title": "추출된 소재의 핵심을 담은 짧은 제목",
@@ -51,8 +60,6 @@ def extract_material(req: ExtractRequest):
         "topic_ids": ["선택된 주제1", "선택된 주제2"],
         "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
     }
-    - 주의: topic_ids는 반드시 다음 10개 중 1개 이상을 선택해야 합니다. 
-      [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
     """
     response = client.chat.completions.create(
         model="gpt-6-luna",
@@ -93,13 +100,28 @@ def get_next_question(req: QnARequest):
     )
     return json.loads(response.choices[0].message.content)
 
+{
+  "chat_history": [
+    {
+      "role": "assistant",
+      "content": "퇴사하게 된 이유는 무엇인가요?"
+    },
+    {
+      "role": "user",
+      "content": "퇴사 이유는 자세히 쓰고 싶지 않아요. 마지막 날 제 책상 서랍을 비우던 장면만 남기고 싶어요."
+    }
+  ]
+}
+
 # ==========================================
 # 3. AI 에세이 초안 생성 API (W330)
+# [수정] 프론트엔드 N120 화면과 맞추기 위해 'direction(글의 방향)' 추가
 # ==========================================
 class DraftRequest(BaseModel):
     materials: list
     tone: str
     length: str
+    direction: str  # 추가된 파라미터 (글의 방향)
 
 @app.post("/api/essay/draft")
 def generate_draft(req: DraftRequest):
@@ -111,13 +133,15 @@ def generate_draft(req: DraftRequest):
     
     [절대 규칙]
     1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
-    2. 사용자가 요청한 문체({req.tone})로 작성하고, 분량은 반드시 **{length_guide}**로 작성하세요. 공백을 포함한 분량입니다.
-    3. 반드시 아래 JSON 형식으로만 응답하세요.
+    2. 사용자가 제시한 '글의 방향'을 글의 핵심 주제와 흐름으로 삼아 자연스럽게 전개하세요. (만약 빈칸이라면 소재들만 자연스럽게 엮어주세요)
+    3. 사용자가 요청한 문체({req.tone})로 작성하고, 분량은 반드시 **{length_guide}**로 작성하세요. 공백을 포함한 분량입니다.
+    4. 반드시 아래 JSON 형식으로만 응답하세요.
     {{
-        "draft_content": "작성된 에세이 초안 본문"
+        "essay_content": "작성된 에세이 초안 본문"
     }}
     """
-    user_prompt = f"- 소재 목록: {req.materials}"
+    # AI가 참고할 수 있도록 글의 방향을 추가해서 전달합니다.
+    user_prompt = f"- 글의 방향: {req.direction}\n- 소재 목록: {req.materials}"
     
     response = client.chat.completions.create(
         model="gpt-6-luna",
