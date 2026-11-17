@@ -221,3 +221,38 @@ def retouch_draft(req: RetouchRequest):
         # temperature=0.7 
     )
     return json.loads(response.choices[0].message.content)
+
+# ==========================================
+# 5. 글쓰기 제안 API (N130)
+# [추가] 제목, 추천 이유, 글의 방향을 한 번에 생성하여 제안하는 기능
+# ==========================================
+class ProposalRequest(BaseModel):
+    materials: list  # 사용자가 선택했거나 AI가 묶어준 소재 리스트
+
+@app.post("/api/proposal/recommend")
+def recommend_proposal(req: ProposalRequest):
+    system_prompt = """
+    당신은 사용자의 일상 기록(소재)들을 엮어서 한 편의 완성된 글을 쓸 수 있도록 기획안을 제안하는 전문 에디터입니다.
+    사용자가 제시한 소재들을 바탕으로 다음 3가지 항목을 작성해 주세요.
+    
+    [절대 규칙]
+    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    {
+        "title": "글의 핵심 주제를 담은 짧은 제목",
+        "reason": "왜 이 소재들을 묶어서 글을 쓰면 좋은지 사용자에게 설명하는 다정한 추천 이유",
+        "direction": "글을 어떻게 엮을지 구조를 지시하는 명확한 한 문장"
+    }
+    2. 'direction(글의 방향)'은 'title(제목)'을 다른 말로 단순 반복해서는 안 됩니다. AI가 실제로 초안을 작성할 때 뼈대가 될 수 있도록, 구체적인 전개 방식(예: 시간 순서, 두 사건의 대비, 특정 장면에서 시작 등)을 지시하세요.
+    """
+    user_prompt = f"- 선택된 소재 목록:\n{req.materials}"
+    
+    response = client.chat.completions.create(
+        model="gpt-6-luna",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        response_format={"type": "json_object"},
+        # temperature=0.7
+    )
+    return json.loads(response.choices[0].message.content)
