@@ -164,3 +164,35 @@ def test_clear_user_data(owner, make_user):
     assert owner.execute("select count(*) n from records where user_id = %s", (b,)).fetchone()["n"] == 1
     u = owner.execute("select * from users where id = %s", (a,)).fetchone()
     assert u["ai_consent_at"] is not None and u["data_cleared_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Supabase deletes users as supabase_auth_admin (search_path = auth): our triggers
+# must still find their tables (migration 0006)
+# ---------------------------------------------------------------------------
+def test_functions_have_fixed_search_path(owner):
+    rows = owner.execute(
+        "select proname from pg_proc where pronamespace = 'public'::regnamespace "
+        "and prokind = 'f' and not coalesce(proconfig, '{}') @> "
+        "array['search_path=public, pg_temp']"
+    ).fetchall()
+    assert rows == []
+
+
+def test_deleting_auth_user_with_auth_search_path(owner, make_user):
+    uid = make_user()
+    rec = owner.execute(
+        "insert into records (user_id, type, body, status, saved_at) "
+        "values (%s, 'free', '원본', 'saved', now()) returning id", (uid,)).fetchone()["id"]
+    mat = owner.execute(
+        "insert into materials (user_id, record_id, origin) values (%s, %s, 'ai') returning id",
+        (uid, rec)).fetchone()["id"]
+    owner.execute("insert into material_topics values (%s, 1)", (mat,))
+
+    owner.execute("set search_path = auth")
+    try:
+        owner.execute("delete from auth.users where id = %s", (uid,))
+    finally:
+        owner.execute("set search_path = public")
+    assert owner.execute("select count(*) n from records where user_id = %s",
+                         (uid,)).fetchone()["n"] == 0
