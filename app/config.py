@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     jwt_audience: str = "authenticated"
     cors_origins: str = "http://localhost:3000"
 
+    # AI (C). "stub" = fixed sample questions, no external calls (until C's code is in).
+    ai_provider: str = "stub"
+    ai_question_timeout_seconds: float = 30
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

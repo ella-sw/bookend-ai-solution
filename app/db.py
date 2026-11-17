@@ -8,7 +8,9 @@ RLS is the safety net, not the only check.
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from psycopg import AsyncConnection
@@ -44,26 +46,47 @@ def pool() -> AsyncConnectionPool:
     return _pool
 
 
-async def user_conn(
-    user: Annotated[CurrentUser, Depends(current_user)],
-) -> AsyncIterator[AsyncConnection]:
-    """FastAPI dependency: a connection acting as the calling user, in one transaction."""
+@asynccontextmanager
+async def user_tx(user_id: UUID) -> AsyncIterator[AsyncConnection]:
+    """One transaction acting as `user_id` (RLS applies). Use directly when a request
+    needs several transactions, e.g. save first, then call the AI, then save again."""
     async with pool().connection() as conn, conn.transaction():
         await conn.execute("set local role app_user")
         await conn.execute(
             "select set_config('request.jwt.claims', %s, true)",
-            (json.dumps({"sub": str(user.id), "role": "authenticated"}),),
+            (json.dumps({"sub": str(user_id), "role": "authenticated"}),),
         )
+        yield conn
+
+
+@asynccontextmanager
+async def owner_tx() -> AsyncIterator[AsyncConnection]:
+    """One transaction as the database owner (no RLS). Only for shared data that no
+    user owns, such as writing the daily questions."""
+    async with pool().connection() as conn, conn.transaction():
+        yield conn
+
+
+async def user_conn(
+    user: Annotated[CurrentUser, Depends(current_user)],
+) -> AsyncIterator[AsyncConnection]:
+    """FastAPI dependency: a connection acting as the calling user, in one transaction."""
+    async with user_tx(user.id) as conn:
         yield conn
 
 
 UserConn = Annotated[AsyncConnection, Depends(user_conn)]
 
 
-async def consented_conn(conn: UserConn) -> AsyncConnection:
-    """Like UserConn, but 403 `not_consented` until the caller agreed on O110 (users row exists)."""
+async def require_consent(conn: AsyncConnection) -> None:
+    """403 `not_consented` until the caller agreed on O110 (users row exists)."""
     if await (await conn.execute("select 1 from users where id = auth.uid()")).fetchone() is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_consented")
+
+
+async def consented_conn(conn: UserConn) -> AsyncConnection:
+    """Like UserConn, but only for users who agreed on O110."""
+    await require_consent(conn)
     return conn
 
 
