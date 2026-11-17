@@ -8,7 +8,10 @@ from dotenv import load_dotenv
 
 # .env 파일에 적어둔 API 키를 불러옵니다.
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("ELICE_API_KEY"),
+    base_url=os.getenv("ELICE_BASE_URL")
+)
 
 app = FastAPI(title="Rowflow AI API Server", version="1.0")
 
@@ -52,13 +55,13 @@ def extract_material(req: ExtractRequest):
       [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
     """
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-6-luna",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": req.record_text}
         ],
         response_format={"type": "json_object"}, 
-        temperature=0.3 
+        # temperature=0.3 
     )
     return json.loads(response.choices[0].message.content)
 
@@ -83,10 +86,10 @@ def get_next_question(req: QnARequest):
     """
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-6-luna",
         messages=messages,
         response_format={"type": "json_object"}, 
-        temperature=0.7 
+        # temperature=0.7 
     )
     return json.loads(response.choices[0].message.content)
 
@@ -95,33 +98,37 @@ def get_next_question(req: QnARequest):
 # ==========================================
 class DraftRequest(BaseModel):
     materials: list
-    direction: str
     tone: str
     length: str
 
 @app.post("/api/essay/draft")
 def generate_draft(req: DraftRequest):
+    # 단문, 장문 구체적 글자 수 매핑 (요구사항 정의서 W320 기준)
+    length_guide = "300자에서 500자 사이" if req.length == "단문" else "1000자에서 1500자 사이"
+    
     system_prompt = f"""
     당신은 사용자의 기록을 바탕으로 에세이를 작성하는 전문 작가입니다.
     
     [절대 규칙]
-    1. 사용자가 제공한 '소재'와 '글의 방향'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
-    2. 사용자가 요청한 문체({req.tone})와 분량({req.length})을 반드시 지켜서 작성하세요.
+    1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
+    2. 사용자가 요청한 문체({req.tone})로 작성하고, 분량은 반드시 **{length_guide}**로 작성하세요. 공백을 포함한 분량입니다.
     3. 반드시 아래 JSON 형식으로만 응답하세요.
     {{
         "draft_content": "작성된 에세이 초안 본문"
     }}
     """
-    user_prompt = f"- 소재 목록: {req.materials}\n- 글의 방향: {req.direction}"
+    user_prompt = f"- 소재 목록: {req.materials}"
+    
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-6-luna",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
         response_format={"type": "json_object"},
-        temperature=0.7
+        # temperature=0.7
     )
+    
     return json.loads(response.choices[0].message.content)
 
 # ==========================================
@@ -147,12 +154,12 @@ def retouch_draft(req: RetouchRequest):
     """
     user_prompt = f"- 기존 초안:\n{req.original_draft}\n- 처음 고른 소재:\n{req.selected_materials}"
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-6-luna",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
         response_format={"type": "json_object"},
-        temperature=0.7 
+        # temperature=0.7 
     )
     return json.loads(response.choices[0].message.content)
