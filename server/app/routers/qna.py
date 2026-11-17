@@ -28,16 +28,16 @@ from datetime import date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from psycopg import AsyncConnection
 from pydantic import BaseModel, StringConstraints
 
-from app.ai import AIError, QuestionAI, Turn, get_question_ai
+from app.ai import AIError, MaterialAI, QuestionAI, Turn, get_material_ai, get_question_ai
 from app.auth import CurrentUser, current_user
 from app.config import get_settings
 from app.db import owner_tx, require_consent, user_tx
 from app.routers.records import COLUMNS as RECORD_COLUMNS
-from app.routers.records import Record
+from app.routers.records import Record, start_analysis_after
 
 router = APIRouter(tags=["qna"])
 
@@ -50,6 +50,7 @@ KST_TODAY = "(now() at time zone 'Asia/Seoul')::date"
 
 User = Annotated[CurrentUser, Depends(current_user)]
 AI = Annotated[QuestionAI, Depends(get_question_ai)]
+MaterialAIDep = Annotated[MaterialAI, Depends(get_material_ai)]
 Answer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
 
 
@@ -456,11 +457,12 @@ async def discard_active(record_id: UUID, user: User) -> Response:
 @router.post("/qna/{record_id}/save", response_model=Record,
              status_code=status.HTTP_201_CREATED,
              responses={200: {"description": "Already saved (retry): the saved record"}})
-async def save_record(record_id: UUID, user: User, response: Response) -> dict:
+async def save_record(record_id: UUID, user: User, material_ai: MaterialAIDep,
+                      background: BackgroundTasks, response: Response) -> dict:
     """[소재로 저장]: 답변 2개부터. 답을 기다리던 질문은 빼고 저장한다. 이후 고칠 수 없다.
 
     Safe to retry: if this conversation is already saved, 200 with the saved record.
-    Material analysis (R28) starts from this saved record; that comes with C's AI part.
+    R28: a new save starts the material analysis, as for free writing.
     """
     async with user_tx(user.id) as conn:
         await require_consent(conn)
@@ -490,4 +492,4 @@ async def save_record(record_id: UUID, user: User, response: Response) -> dict:
             "insert into events (user_id, name, record_id) values (auth.uid(), 'record_saved', %s)",
             (record_id,),
         )
-    return row
+    return await start_analysis_after(user.id, row, material_ai, background)

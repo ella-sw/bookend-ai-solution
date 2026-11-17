@@ -62,7 +62,7 @@ def test_save_new_record(client, make_user, owner):
     r = client.post("/records/free", headers=auth(a), json={"save_token": tok(), "body": "오늘 엄마랑 통화했다"})
     assert r.status_code == 201
     rec = r.json()
-    assert rec["status"] == "saved" and rec["saved_at"] and rec["analysis_status"] == "none"
+    assert rec["status"] == "saved" and rec["saved_at"] and rec["analysis_status"] == "analyzing"
     assert rec["title"] is None
 
     ev = owner.execute("select name, record_id::text from events where user_id = %s",

@@ -18,10 +18,14 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from psycopg import AsyncConnection
 from pydantic import BaseModel, Field, StringConstraints
 
-from app.db import ConsentedConn
+from app.ai import MaterialAI, get_material_ai
+from app.analysis import run_analysis, start_after_save
+from app.auth import CurrentUser, current_user
+from app.db import ConsentedConn, require_consent, user_tx
 
 router = APIRouter(prefix="/records", tags=["records"])
 
@@ -114,15 +118,43 @@ async def save_free_draft(data: DraftIn, conn: ConsentedConn) -> dict:
 
 @router.post("/free", response_model=Record, status_code=status.HTTP_201_CREATED,
              responses={200: {"description": "Already saved (retry): the saved record"}})
-async def save_free_record(data: SaveIn, conn: ConsentedConn, response: Response) -> dict:
+async def save_free_record(
+    data: SaveIn,
+    user: Annotated[CurrentUser, Depends(current_user)],
+    ai: Annotated[MaterialAI, Depends(get_material_ai)],
+    background: BackgroundTasks,
+    response: Response,
+) -> dict:
     """W110 [소재로 저장]: save the original record. It can't be edited afterwards.
 
     Safe to retry (e.g. the response was lost on a phone): 201 when saved now,
     200 with the same record when this `save_token` or `record_id` was already saved.
-    Material analysis (R28) starts from this saved record; that API comes with C's AI part.
+
+    R28: a new save starts the material analysis (analysis_status = analyzing); the
+    screen then polls GET /records/{id}/analysis. If the analysis cannot start, the save
+    still succeeds and analysis_status is 'failed'.
     """
     if not data.body.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty_body")
+    async with user_tx(user.id) as conn:
+        await require_consent(conn)
+        row = await _save_free(conn, data, response)
+    if response.status_code != status.HTTP_200_OK:  # saved now, not a retry
+        row = await start_analysis_after(user.id, row, ai, background)
+    return row
+
+
+async def start_analysis_after(user_id: UUID, row: dict, ai: MaterialAI,
+                               background: BackgroundTasks) -> dict:
+    """After a save committed: start R28 and run the AI once the response is sent."""
+    request_id = await start_after_save(user_id, row["id"])
+    if request_id is None:
+        return {**row, "analysis_status": "failed"}
+    background.add_task(run_analysis, user_id, row["id"], request_id, ai)
+    return {**row, "analysis_status": "analyzing"}
+
+
+async def _save_free(conn: AsyncConnection, data: SaveIn, response: Response) -> dict:
     title = _clean_title(data.title)
 
     async def already_saved(where: str, value: UUID) -> dict | None:

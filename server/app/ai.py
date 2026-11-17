@@ -1,16 +1,26 @@
 """AI connection point (C's part).
 
-The API code only calls the `QuestionAI` interface below. To use a real model,
-C adds a class with the same two methods (e.g. `OpenAIQuestionAI`) and returns it
-from `get_question_ai()` when `AI_PROVIDER` says so. Nothing else changes.
+The API code only calls the interfaces below (`QuestionAI`, `MaterialAI`). To use a
+real model, C adds classes with the same methods (e.g. `OpenAIQuestionAI`) and returns
+them from `get_question_ai()` / `get_material_ai()` when `AI_PROVIDER` says so.
+Nothing else changes.
 
-Rules the real implementation must keep (requirements R05):
+Rules the real implementation must keep:
+R05 QuestionAI
 - next_question: one question at a time, based on the conversation so far.
   Never invent experiences or feelings that are not in the answers.
   Do not repeat the direction of questions in `avoid` (replaced questions).
 - daily_questions: exactly 30 questions shared by all users for that date.
+R28 MaterialAI
+- extract_material: 0 or 1 material from what the user wrote (`source.user_text()`).
+  No writing material → return `material=None` (소재 없음); never an empty material.
+- Never add experiences or feelings that are not in the text.
+- `evidence` must be a sentence copied from `source.user_text()` (the server checks).
+- `topics` are names from the given list (one or more).
+- Only the user's writing is analysed: for Q&A the answers, not the AI's questions.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
@@ -39,6 +49,37 @@ class AIQuestions:
     output_tokens: int | None = None
 
 
+@dataclass
+class ExtractSource:
+    """A saved record to analyse (R28)."""
+    type: str  # free / qna
+    title: str | None
+    body: str | None  # free writing only
+    turns: list[Turn] = field(default_factory=list)  # Q&A only: answered pairs in order
+
+    def user_text(self) -> str:
+        """What the user wrote. `evidence` must come from here."""
+        if self.type == "qna":
+            return "\n".join(t.answer for t in self.turns if t.answer)
+        return self.body or ""
+
+
+@dataclass
+class ExtractedMaterial:
+    summary: str  # 요약 한 줄
+    evidence: str  # 근거 문장 (원문에 있는 문장)
+    keywords: list[str]
+    topics: list[str]  # names from the topic list
+    title: str | None = None
+
+
+@dataclass
+class AIExtract:
+    material: ExtractedMaterial | None  # None = 소재 없음
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
 class AIError(Exception):
     """The AI call failed or returned something unusable."""
 
@@ -49,6 +90,11 @@ class QuestionAI(Protocol):
 
     async def daily_questions(self, for_date: date) -> AIQuestions:
         """The 30 shared first questions for `for_date`."""
+
+
+class MaterialAI(Protocol):
+    async def extract_material(self, source: ExtractSource, topics: list[str]) -> AIExtract:
+        """R28: 0 or 1 material from a saved record. `topics` = the 10 topic names."""
 
 
 # ---------------------------------------------------------------------------
@@ -123,4 +169,53 @@ def get_question_ai() -> QuestionAI:
     provider = get_settings().ai_provider
     if provider == "stub":
         return StubQuestionAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Stub material extraction: simple rules, no external calls.
+# Short text → 소재 없음; otherwise the first sentence becomes the evidence.
+# ---------------------------------------------------------------------------
+_STUB_TOPIC_WORDS = {
+    "가족": ["엄마", "아빠", "가족", "동생", "언니", "누나", "형", "오빠", "할머니", "할아버지"],
+    "관계": ["친구", "동료", "연인", "선배", "후배"],
+    "일·직업": ["회사", "업무", "출근", "퇴근", "회의", "직장"],
+    "여행·장소": ["여행", "바다", "공항", "기차"],
+    "음식": ["밥", "커피", "음식", "요리", "먹"],
+    "몸·건강": ["운동", "병원", "아프", "잠"],
+    "자연·계절": ["봄", "여름", "가을", "겨울", "꽃", "눈이", "비가"],
+    "취향·취미": ["노래", "영화", "책", "그림", "취미"],
+}
+_STUB_MIN_CHARS = 15
+
+
+class StubMaterialAI:
+    async def extract_material(self, source: ExtractSource, topics: list[str]) -> AIExtract:
+        text = source.user_text().strip()
+        if len(text) < _STUB_MIN_CHARS:
+            return AIExtract(None, 0, 0)
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?。])\s+|\n+", text) if s.strip()]
+        evidence = sentences[0]
+        words = []
+        for w in re.findall(r"[가-힣A-Za-z]{2,}", text):
+            if w not in words:
+                words.append(w)
+        found = [t for t, keys in _STUB_TOPIC_WORDS.items()
+                 if t in topics and any(k in text for k in keys)]
+        material = ExtractedMaterial(
+            title=evidence[:20],
+            summary=evidence[:60],
+            evidence=evidence,
+            keywords=words[:3],
+            topics=found or ["일상"],
+        )
+        return AIExtract(material, 0, 0)
+
+
+@lru_cache
+def get_material_ai() -> MaterialAI:
+    """FastAPI dependency. Tests override it to simulate failures."""
+    provider = get_settings().ai_provider
+    if provider == "stub":
+        return StubMaterialAI()
     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
