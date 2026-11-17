@@ -401,3 +401,18 @@ def test_clear_all_includes_active_and_draft(client, make_user, owner):
     owner.execute("select clear_user_data(%s)", (a,))
     n = owner.execute("select count(*) n from records where user_id = %s", (a,)).fetchone()["n"]
     assert n == 0
+    # what the screen sees after S120
+    assert client.get("/qna/active", headers=auth(a)).json() is None
+    assert client.get("/qna/draft", headers=auth(a)).json() is None
+
+
+def test_month_cleanup_includes_active_and_draft(client, make_user, owner):
+    """1달 정리에도 active·draft 포함."""
+    a = make_user()
+    s = start(client, a)
+    client.post(f"/qna/{s['record_id']}/draft", headers=auth(a))
+    start(client, a, "새 대화")  # active
+    owner.execute("update users set last_seen_at = now() - interval '32 days' where id = %s", (a,))
+    owner.execute("select cleanup_inactive_users()")
+    assert client.get("/qna/active", headers=auth(a)).json() is None
+    assert client.get("/qna/draft", headers=auth(a)).json() is None
