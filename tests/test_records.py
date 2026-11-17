@@ -28,9 +28,9 @@ def test_no_draft_at_first(client, make_user):
 
 def test_draft_is_created_then_overwritten(client, make_user):
     a = make_user()
-    first = client.put("/records/free/draft", headers=auth(a),
+    first = client.post("/records/free/draft", headers=auth(a),
                        json={"title": "첫 제목", "body": "처음 쓴 내용"}).json()
-    second = client.put("/records/free/draft", headers=auth(a),
+    second = client.post("/records/free/draft", headers=auth(a),
                         json={"title": "", "body": "고친 내용"}).json()
 
     assert second["id"] == first["id"]  # still one draft
@@ -44,7 +44,7 @@ def test_draft_is_created_then_overwritten(client, make_user):
 
 def test_empty_draft_is_allowed(client, make_user):
     a = make_user()
-    assert client.put("/records/free/draft", headers=auth(a), json={"body": ""}).status_code == 200
+    assert client.post("/records/free/draft", headers=auth(a), json={"body": ""}).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def test_save_new_record(client, make_user, owner):
 
 def test_save_continuing_draft_turns_draft_into_record(client, make_user):
     a = make_user()
-    draft = client.put("/records/free/draft", headers=auth(a), json={"body": "쓰는 중"}).json()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "쓰는 중"}).json()
 
     saved = client.post("/records/free", headers=auth(a),
                         json={"body": "다 썼다", "draft_id": draft["id"]}).json()
@@ -81,7 +81,7 @@ def test_save_continuing_draft_turns_draft_into_record(client, make_user):
 
 def test_starting_fresh_keeps_old_draft(client, make_user):
     a = make_user()
-    draft = client.put("/records/free/draft", headers=auth(a), json={"body": "예전 임시 저장"}).json()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "예전 임시 저장"}).json()
 
     client.post("/records/free", headers=auth(a), json={"body": "새로 쓴 기록"})  # [아니오] path
 
@@ -101,7 +101,7 @@ def test_saved_record_cannot_be_overwritten_through_draft(client, make_user):
     saved = client.post("/records/free", headers=auth(a), json={"body": "저장한 원본"}).json()
 
     # a new draft is a separate row; the saved record keeps its body
-    client.put("/records/free/draft", headers=auth(a), json={"body": "새 임시 저장"})
+    client.post("/records/free/draft", headers=auth(a), json={"body": "새 임시 저장"})
     assert client.get(f"/records/{saved['id']}", headers=auth(a)).json()["body"] == "저장한 원본"
 
 
@@ -110,13 +110,13 @@ def test_saved_record_cannot_be_overwritten_through_draft(client, make_user):
 # ---------------------------------------------------------------------------
 def test_requires_consent(client, make_user):
     a = make_user(consented=False)
-    r = client.put("/records/free/draft", headers=auth(a), json={"body": "x"})
+    r = client.post("/records/free/draft", headers=auth(a), json={"body": "x"})
     assert r.status_code == 403 and r.json()["detail"] == "not_consented"
 
 
 def test_other_user_cannot_see_or_use_my_records(client, make_user):
     a, b = make_user(), make_user()
-    draft = client.put("/records/free/draft", headers=auth(a), json={"body": "A의 임시 저장"}).json()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "A의 임시 저장"}).json()
     saved = client.post("/records/free", headers=auth(a), json={"body": "A의 기록"}).json()
 
     assert client.get(f"/records/{saved['id']}", headers=auth(b)).status_code == 404
@@ -129,3 +129,41 @@ def test_other_user_cannot_see_or_use_my_records(client, make_user):
 
 def test_requires_token(client):
     assert client.get("/records/free/draft").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# POST /records/free/draft with record_id (continuing a draft)
+# ---------------------------------------------------------------------------
+def test_continue_draft_with_record_id(client, make_user):
+    a = make_user()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "처음"}).json()
+    again = client.post("/records/free/draft", headers=auth(a),
+                        json={"body": "이어서 더 씀", "record_id": draft["id"]})
+    assert again.status_code == 200
+    assert again.json()["id"] == draft["id"] and again.json()["body"] == "이어서 더 씀"
+
+
+def test_continue_draft_that_was_already_saved(client, make_user):
+    a = make_user()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "쓰는 중"}).json()
+    client.post("/records/free", headers=auth(a), json={"body": "다 씀", "draft_id": draft["id"]})
+
+    r = client.post("/records/free/draft", headers=auth(a),
+                    json={"body": "다른 탭에서 임시 저장", "record_id": draft["id"]})
+    assert r.status_code == 404 and r.json()["detail"] == "draft_not_found"
+    # the saved record is untouched
+    assert client.get(f"/records/{draft['id']}", headers=auth(a)).json()["body"] == "다 씀"
+
+
+def test_cannot_continue_another_users_draft(client, make_user):
+    a, b = make_user(), make_user()
+    draft = client.post("/records/free/draft", headers=auth(a), json={"body": "A의 글"}).json()
+    r = client.post("/records/free/draft", headers=auth(b),
+                    json={"body": "덮어쓰기", "record_id": draft["id"]})
+    assert r.status_code == 404
+    assert client.get("/records/free/draft", headers=auth(a)).json()["body"] == "A의 글"
+
+
+def test_put_is_gone(client, make_user):
+    a = make_user()
+    assert client.put("/records/free/draft", headers=auth(a), json={"body": "x"}).status_code == 405

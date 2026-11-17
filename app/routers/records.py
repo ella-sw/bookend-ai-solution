@@ -3,7 +3,8 @@
 Flow for the frontend:
   1. Start free writing → GET /records/free/draft
      200 = a draft exists → ask "이어서 쓰시겠습니까?"; 404 = start empty.
-  2. [임시 저장] → PUT /records/free/draft (creates or overwrites the one draft).
+  2. [임시 저장] → POST /records/free/draft (creates or overwrites the one draft;
+     send `record_id` when continuing a draft).
   3. [소재로 저장] → POST /records/free
      - continuing a draft: send its id as `draft_id`, the draft becomes the saved record
      - started fresh ([아니오]): omit `draft_id`, the old draft stays until the next [임시 저장]
@@ -48,6 +49,8 @@ class Record(BaseModel):
 class DraftIn(BaseModel):
     title: Title | None = None
     body: Body = ""  # a draft may be empty
+    record_id: UUID | None = Field(
+        default=None, description="Id of the draft being continued. Omit for a new draft.")
 
 
 class SaveIn(BaseModel):
@@ -73,9 +76,26 @@ async def get_free_draft(conn: ConsentedConn) -> dict:
     return row
 
 
-@router.put("/free/draft", response_model=Record)
-async def put_free_draft(data: DraftIn, conn: ConsentedConn) -> dict:
-    """W111 [임시 저장]: create the one draft, or overwrite it."""
+@router.post("/free/draft", response_model=Record)
+async def save_free_draft(data: DraftIn, conn: ConsentedConn) -> dict:
+    """W111 [임시 저장]: create the one draft, or overwrite the previous one.
+
+    Continuing a draft: send its id as `record_id`. If that draft no longer exists
+    (e.g. it was saved as a record in another tab), 404 `draft_not_found`.
+    """
+    if data.record_id is not None:
+        row = await (await conn.execute(
+            f"""
+            update records set title = %s, body = %s
+             where id = %s and user_id = auth.uid() and type = 'free' and status = 'draft'
+            returning {COLUMNS}
+            """,
+            (_clean_title(data.title), data.body, data.record_id),
+        )).fetchone()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="draft_not_found")
+        return row
+
     return await (await conn.execute(
         f"""
         insert into records (user_id, type, title, body)
