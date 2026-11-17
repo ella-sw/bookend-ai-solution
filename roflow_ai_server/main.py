@@ -82,14 +82,15 @@ class QnARequest(BaseModel):
 def get_next_question(req: QnARequest):
     system_prompt = """
     당신은 사용자의 일상과 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
-    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 '단 하나의 꼬리 질문'만 작성하세요.
+    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 꼬리 질문을 작성하세요.
     
     [절대 규칙]
     1. 반드시 아래 JSON 형식으로만 응답할 것.
     {
         "next_question": "생성된 질문 내용"
     }
-    2. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
+    2. 복합 질문 절대 금지: 한 번의 응답에는 오직 1개의 물음표(?)만 사용하세요. (예: "A는 무엇이고, B는 어땠나요?"처럼 두 가지를 동시에 묻지 말고 가장 중요한 한 가지만 질문하세요.)
+    3. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
     """
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
     response = client.chat.completions.create(
@@ -112,6 +113,39 @@ def get_next_question(req: QnARequest):
     }
   ]
 }
+# ==========================================
+# 2-2. AI 다른 질문 보기 (재생성) API (W220)
+# [추가] 분석가 피드백 Q08 반영: 기존 질문과 겹치지 않는 새로운 질문 생성
+# ==========================================
+class QnAAltRequest(BaseModel):
+    chat_history: list
+    rejected_questions: list  # 사용자가 이미 본(스킵한) 질문들의 목록
+
+@app.post("/api/qna/alternative")
+def get_alternative_question(req: QnAAltRequest):
+    system_prompt = f"""
+    당신은 사용자의 일상과 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
+    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 '새로운' 꼬리 질문을 작성하세요.
+    
+    [절대 규칙]
+    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    {{
+        "next_question": "생성된 질문 내용"
+    }}
+    2. 복합 질문 절대 금지: 한 번의 응답에는 오직 1개의 물음표(?)만 사용하세요.
+    3. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
+    4. [중요] 아래에 나열된 기존 질문들과 의미나 형태가 겹치지 않는 완전히 새로운 방향의 질문을 생성하세요.
+       - 제외할 기존 질문 목록: {req.rejected_questions}
+    """
+    messages = [{"role": "system", "content": system_prompt}] + req.chat_history
+    
+    response = client.chat.completions.create(
+        model="gpt-6-luna",
+        messages=messages,
+        response_format={"type": "json_object"}, 
+        # temperature=0.8  # 다양한 질문이 나오도록 창의성(온도)을 살짝 높이는 것을 권장합니다.
+    )
+    return json.loads(response.choices[0].message.content)
 
 # ==========================================
 # 3. AI 에세이 초안 생성 API (W330)
