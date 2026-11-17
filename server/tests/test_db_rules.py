@@ -179,7 +179,7 @@ def test_functions_have_fixed_search_path(owner):
     assert rows == []
 
 
-def test_deleting_auth_user_with_auth_search_path(owner, make_user):
+def test_supabase_can_delete_a_user(owner, make_user):
     uid = make_user()
     rec = owner.execute(
         "insert into records (user_id, type, body, status, saved_at) "
@@ -188,11 +188,28 @@ def test_deleting_auth_user_with_auth_search_path(owner, make_user):
         "insert into materials (user_id, record_id, origin) values (%s, %s, 'ai') returning id",
         (uid, rec)).fetchone()["id"]
     owner.execute("insert into material_topics values (%s, 1)", (mat,))
+    req = owner.execute(
+        "insert into ai_requests (user_id, kind, target_type, target_id) "
+        "values (%s, 'extract', 'record', %s) returning id", (uid, rec)).fetchone()["id"]
+    owner.execute("update records set latest_analysis_request_id = %s where id = %s", (req, rec))
+    owner.execute("insert into events (user_id, name, record_id) values (%s, 'record_saved', %s)",
+                  (uid, rec))
+    qna = owner.execute("insert into records (user_id, type) values (%s, 'qna') returning id",
+                        (uid,)).fetchone()["id"]
+    owner.execute("insert into qna_messages (record_id, seq, question, question_source, answer) "
+                  "values (%s, 1, '질문', 'daily', '답')", (qna,))
 
+    # like Supabase's dashboard [Delete user]: its own role, search_path = auth
+    owner.execute("set role supabase_auth_admin")
     owner.execute("set search_path = auth")
     try:
         owner.execute("delete from auth.users where id = %s", (uid,))
     finally:
+        owner.execute("reset role")
         owner.execute("set search_path = public")
-    assert owner.execute("select count(*) n from records where user_id = %s",
-                         (uid,)).fetchone()["n"] == 0
+    left = owner.execute(
+        "select (select count(*) from records where user_id = %(u)s) "
+        "     + (select count(*) from ai_requests where user_id = %(u)s) "
+        "     + (select count(*) from events where user_id = %(u)s) "
+        "     + (select count(*) from users where id = %(u)s) as n", {"u": uid}).fetchone()["n"]
+    assert left == 0

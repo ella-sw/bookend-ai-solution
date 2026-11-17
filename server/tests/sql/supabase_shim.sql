@@ -58,3 +58,14 @@ begin
     grant app_user to supabase_migrator with admin option;
   end if;
 end $$;
+
+-- Supabase deletes users (dashboard / admin API) as this role: rights on auth only,
+-- search_path = auth. Tests delete users as this role (test_db_rules.py).
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'supabase_auth_admin') then
+    create role supabase_auth_admin nologin;
+  end if;
+end $$;
+grant usage on schema auth to supabase_auth_admin;
+grant select, delete on auth.users to supabase_auth_admin;
