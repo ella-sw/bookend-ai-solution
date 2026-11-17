@@ -117,6 +117,11 @@ async def reanalyze(record_id: UUID, user: User, ai: AI, background: BackgroundT
             return state
         if not state.can_reanalyze:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="cannot_reanalyze")
+        deleted = await (await conn.execute(
+            "select 1 from materials where record_id = %s and deleted_at is not null",
+            (record_id,))).fetchone()
+        if deleted is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="material_deleted")
         request_id = await start_analysis(conn, record_id)
         state = await _state(conn, record_id)
     if request_id is not None:

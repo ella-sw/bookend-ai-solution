@@ -237,7 +237,7 @@ def test_confirmed_material_is_not_overwritten(client, make_user, owner):
     st = analysis(client, a, rec["id"]).json()
     assert st["material"]["summary"] == "내가 고친 요약"
     # the new result waits on the request for R27 ([바꾸기]/[그대로 두기])
-    assert requests(owner, rec["id"])[-1]["result"]["evidence"] == "오늘 엄마랑 오랜만에 통화했다."
+    assert requests(owner, rec["id"])[-1]["result"]["material"]["evidence"] == "오늘 엄마랑 오랜만에 통화했다."
 
 
 # ---------------------------------------------------------------------------

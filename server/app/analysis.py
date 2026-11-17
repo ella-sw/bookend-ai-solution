@@ -175,6 +175,21 @@ async def _finish_failed(user_id: UUID, record_id: UUID, request_id: int, reason
 
 async def _apply(conn: AsyncConnection, record_id: UUID, material: dict | None,
                  result: AIExtract) -> None:
+    existing = await (await conn.execute(
+        "select id, confirmed_at from materials where record_id = %s for update", (record_id,),
+    )).fetchone()
+    if existing is not None and existing["confirmed_at"] is not None:
+        # R27 다시 분석: a confirmed material is never overwritten. The new result waits on
+        # the request until [바꾸기] (POST /materials/{id}/reanalysis/apply) or [그대로 두기].
+        await conn.execute(
+            "update ai_requests set result = %s where id = "
+            "(select latest_analysis_request_id from records where id = %s)",
+            (Jsonb({"material": material}), record_id),
+        )
+        await conn.execute(
+            "update records set analysis_status = 'done' where id = %s", (record_id,))
+        return
+
     if material is None:
         await conn.execute(
             "update records set analysis_status = 'empty' where id = %s", (record_id,))
@@ -187,28 +202,26 @@ async def _apply(conn: AsyncConnection, record_id: UUID, material: dict | None,
         on conflict (record_id) do update
            set title = excluded.title, summary = excluded.summary,
                evidence = excluded.evidence, keywords = excluded.keywords, origin = 'ai'
-         where materials.confirmed_at is null and materials.deleted_at is null
         returning id
         """,
         {"record": record_id, **material},
     )).fetchone()
-    if row is None:
-        # A confirmed material is never overwritten. Keep the new result on the request
-        # for R27 ([바꾸기]/[그대로 두기] on the material detail screen).
-        await conn.execute(
-            "update ai_requests set result = %s where id = "
-            "(select latest_analysis_request_id from records where id = %s)",
-            (Jsonb(material), record_id),
-        )
-    else:
-        await conn.execute("delete from material_topics where material_id = %s", (row["id"],))
-        await conn.execute(
-            "insert into material_topics (material_id, topic_id) "
-            "select %s, unnest(%s::smallint[])",
-            (row["id"], material["topics"]),
-        )
+    await set_topics(conn, row["id"], material["topics"])
     await conn.execute(
         "update records set analysis_status = 'done' where id = %s", (record_id,))
+
+
+async def set_topics(conn: AsyncConnection, material_id: UUID, topic_ids: list[int]) -> None:
+    """Replace a material's topics (only rows that change, so updated_at moves only then)."""
+    await conn.execute(
+        "delete from material_topics where material_id = %s and topic_id <> all(%s::smallint[])",
+        (material_id, topic_ids),
+    )
+    await conn.execute(
+        "insert into material_topics (material_id, topic_id) "
+        "select %s, unnest(%s::smallint[]) on conflict do nothing",
+        (material_id, topic_ids),
+    )
 
 
 async def run_analysis(user_id: UUID, record_id: UUID, request_id: int, ai: MaterialAI) -> None:
