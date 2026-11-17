@@ -423,7 +423,7 @@ async def save_draft(record_id: UUID, user: User) -> QnaState:
                 await _delete_record(conn, old["id"])
         await conn.execute(
             "update records set status = 'draft', checkpoint_seq = %s, "
-            "checkpoint_pending_id = %s where id = %s",
+            "checkpoint_pending_id = %s, checkpoint_at = now() where id = %s",
             (s["max_seq"], s["pending"]["id"] if s["pending"] else None, record_id),
         )
         return await _state(conn, record_id)
@@ -454,15 +454,27 @@ async def discard_active(record_id: UUID, user: User) -> Response:
 
 
 @router.post("/qna/{record_id}/save", response_model=Record,
-             status_code=status.HTTP_201_CREATED)
-async def save_record(record_id: UUID, user: User) -> dict:
+             status_code=status.HTTP_201_CREATED,
+             responses={200: {"description": "Already saved (retry): the saved record"}})
+async def save_record(record_id: UUID, user: User, response: Response) -> dict:
     """[소재로 저장]: 답변 2개부터. 답을 기다리던 질문은 빼고 저장한다. 이후 고칠 수 없다.
 
+    Safe to retry: if this conversation is already saved, 200 with the saved record.
     Material analysis (R28) starts from this saved record; that comes with C's AI part.
     """
     async with user_tx(user.id) as conn:
         await require_consent(conn)
-        await _lock_open_record(conn, record_id)
+        # Lock first (any status) so a retry running at the same time waits, then sees 'saved'
+        current = await (await conn.execute(
+            f"select {RECORD_COLUMNS} from records where id = %s and user_id = auth.uid() "
+            "and type = 'qna' for update",
+            (record_id,),
+        )).fetchone()
+        if current is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="conversation_not_found")
+        if current["status"] == "saved":
+            response.status_code = status.HTTP_200_OK
+            return current
         s = _summary(await _messages(conn, record_id))
         if s["answer_count"] < MIN_ANSWERS_TO_SAVE:
             raise _conflict("need_more_answers")
@@ -470,7 +482,7 @@ async def save_record(record_id: UUID, user: User) -> dict:
             await conn.execute("delete from qna_messages where id = %s", (s["pending"]["id"],))
         row = await (await conn.execute(
             "update records set status = 'saved', saved_at = now(), "
-            "checkpoint_seq = null, checkpoint_pending_id = null "
+            "checkpoint_seq = null, checkpoint_pending_id = null, checkpoint_at = null "
             f"where id = %s returning {RECORD_COLUMNS}",
             (record_id,),
         )).fetchone()

@@ -346,3 +346,58 @@ def test_requires_consent(client, make_user):
     a = make_user(consented=False)
     r = client.get("/qna/active", headers=auth(a))
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# A 피드백
+# ---------------------------------------------------------------------------
+def test_retry_qna_save_returns_saved_record(client, make_user):
+    a = make_user()
+    s = reply(client, a, start(client, a))
+    first = client.post(f"/qna/{s['record_id']}/save", headers=auth(a))
+    retry = client.post(f"/qna/{s['record_id']}/save", headers=auth(a))
+    assert first.status_code == 201 and retry.status_code == 200
+    assert retry.json()["id"] == first.json()["id"]
+    # another user still gets 404
+    b = make_user()
+    assert client.post(f"/qna/{s['record_id']}/save", headers=auth(b)).status_code == 404
+
+
+def test_revert_deletes_ai_requests_after_checkpoint(client, make_user, owner):
+    a = make_user()
+    s = start(client, a)
+    client.post(f"/qna/{s['record_id']}/draft", headers=auth(a))
+
+    def count():
+        return owner.execute("select count(*) n from ai_requests where target_id = %s",
+                             (s["record_id"],)).fetchone()["n"]
+
+    before = count()
+    s = reply(client, a, client.get("/qna/draft", headers=auth(a)).json())
+    s = replace(client, a, s).json()
+    assert count() == before + 2
+    client.post(f"/qna/{s['record_id']}/discard-changes", headers=auth(a))
+    assert count() == before
+
+
+def test_browser_roles_cannot_call_functions(owner):
+    """supabase.rpc() 차단: public 함수는 anon/authenticated가 실행할 수 없다."""
+    rows = owner.execute(
+        "select p.proname, has_function_privilege('anon', p.oid, 'execute') as anon, "
+        "has_function_privilege('authenticated', p.oid, 'execute') as auth "
+        "from pg_proc p where p.pronamespace = 'public'::regnamespace"
+    ).fetchall()
+    # A new migration that forgets `revoke execute ... from public, anon, authenticated`
+    # fails here.
+    assert rows and not [r["proname"] for r in rows if r["anon"] or r["auth"]]
+
+
+def test_clear_all_includes_active_and_draft(client, make_user, owner):
+    """회신 문서 8절: S120 모든 기록 지우기에 active·draft 포함."""
+    a = make_user()
+    s = start(client, a)
+    client.post(f"/qna/{s['record_id']}/draft", headers=auth(a))
+    start(client, a, "새 대화")  # active
+    owner.execute("select clear_user_data(%s)", (a,))
+    n = owner.execute("select count(*) n from records where user_id = %s", (a,)).fetchone()["n"]
+    assert n == 0
