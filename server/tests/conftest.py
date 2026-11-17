@@ -36,6 +36,7 @@ def database():
         admin.execute(f"create database {TEST_DB}")
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
         conn.execute((ROOT / "tests/sql/supabase_shim.sql").read_text())
+        conn.execute("set role supabase_migrator")  # not a superuser, like Supabase
         for f in sorted((ROOT / "supabase/migrations").glob("*.sql")):
             conn.execute(f.read_text())
     yield
