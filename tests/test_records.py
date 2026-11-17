@@ -68,14 +68,14 @@ def test_save_continuing_draft_turns_draft_into_record(client, make_user):
     draft = client.post("/records/free/draft", headers=auth(a), json={"body": "쓰는 중"}).json()
 
     saved = client.post("/records/free", headers=auth(a),
-                        json={"body": "다 썼다", "draft_id": draft["id"]}).json()
+                        json={"body": "다 썼다", "record_id": draft["id"]}).json()
     assert saved["id"] == draft["id"] and saved["status"] == "saved"
     assert saved["body"] == "다 썼다"
 
-    # the draft is gone; a second tap with the same draft_id does not save twice
+    # the draft is gone; a second tap with the same record_id does not save twice
     assert client.get("/records/free/draft", headers=auth(a)).status_code == 404
     again = client.post("/records/free", headers=auth(a),
-                        json={"body": "다 썼다", "draft_id": draft["id"]})
+                        json={"body": "다 썼다", "record_id": draft["id"]})
     assert again.status_code == 404
 
 
@@ -122,7 +122,7 @@ def test_other_user_cannot_see_or_use_my_records(client, make_user):
     assert client.get(f"/records/{saved['id']}", headers=auth(b)).status_code == 404
     assert client.get("/records/free/draft", headers=auth(b)).status_code == 404
     # B cannot save A's draft
-    r = client.post("/records/free", headers=auth(b), json={"body": "가로채기", "draft_id": draft["id"]})
+    r = client.post("/records/free", headers=auth(b), json={"body": "가로채기", "record_id": draft["id"]})
     assert r.status_code == 404
     assert client.get("/records/free/draft", headers=auth(a)).json()["body"] == "A의 임시 저장"
 
@@ -146,7 +146,7 @@ def test_continue_draft_with_record_id(client, make_user):
 def test_continue_draft_that_was_already_saved(client, make_user):
     a = make_user()
     draft = client.post("/records/free/draft", headers=auth(a), json={"body": "쓰는 중"}).json()
-    client.post("/records/free", headers=auth(a), json={"body": "다 씀", "draft_id": draft["id"]})
+    client.post("/records/free", headers=auth(a), json={"body": "다 씀", "record_id": draft["id"]})
 
     r = client.post("/records/free/draft", headers=auth(a),
                     json={"body": "다른 탭에서 임시 저장", "record_id": draft["id"]})

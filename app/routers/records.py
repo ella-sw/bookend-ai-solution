@@ -6,8 +6,8 @@ Flow for the frontend:
   2. [임시 저장] → POST /records/free/draft (creates or overwrites the one draft;
      send `record_id` when continuing a draft).
   3. [소재로 저장] → POST /records/free
-     - continuing a draft: send its id as `draft_id`, the draft becomes the saved record
-     - started fresh ([아니오]): omit `draft_id`, the old draft stays until the next [임시 저장]
+     - continuing a draft: send its id as `record_id`, the draft becomes the saved record
+     - started fresh ([아니오]): omit `record_id`, the old draft stays until the next [임시 저장]
   4. [저장하지 않고 나가기] → no API call.
 Saved records can never be edited (ERD rule 2, also blocked by a DB trigger).
 """
@@ -56,7 +56,7 @@ class DraftIn(BaseModel):
 class SaveIn(BaseModel):
     title: Title | None = None
     body: Body = Field(description="Must contain text; whitespace only is rejected.")
-    draft_id: UUID | None = Field(
+    record_id: UUID | None = Field(
         default=None, description="Id of the free-writing draft being continued, if any.")
 
 
@@ -118,7 +118,7 @@ async def save_free_record(data: SaveIn, conn: ConsentedConn) -> dict:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty_body")
     title = _clean_title(data.title)
 
-    if data.draft_id is not None:
+    if data.record_id is not None:
         row = await (await conn.execute(
             f"""
             update records
@@ -126,7 +126,7 @@ async def save_free_record(data: SaveIn, conn: ConsentedConn) -> dict:
              where id = %s and user_id = auth.uid() and type = 'free' and status = 'draft'
             returning {COLUMNS}
             """,
-            (title, data.body, data.draft_id),
+            (title, data.body, data.record_id),
         )).fetchone()
         if row is None:
             # Not this user's free draft (or already saved, e.g. a double tap)
