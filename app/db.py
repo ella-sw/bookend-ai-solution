@@ -10,7 +10,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -58,3 +58,13 @@ async def user_conn(
 
 
 UserConn = Annotated[AsyncConnection, Depends(user_conn)]
+
+
+async def consented_conn(conn: UserConn) -> AsyncConnection:
+    """Like UserConn, but 403 `not_consented` until the caller agreed on O110 (users row exists)."""
+    if await (await conn.execute("select 1 from users where id = auth.uid()")).fetchone() is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_consented")
+    return conn
+
+
+ConsentedConn = Annotated[AsyncConnection, Depends(consented_conn)]

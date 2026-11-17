@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import close_pool, open_pool, pool
-from app.routers import me
+from app.routers import me, records
 
 
 @asynccontextmanager
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(me.router)
+app.include_router(records.router)
 
 
 @app.get("/health", tags=["health"])
