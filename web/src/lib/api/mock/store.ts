@@ -83,9 +83,6 @@ function seedRecord(partial: Partial<RecordItem> & Pick<RecordItem, "id" | "type
     created_at: daysAgo(3),
     saved_at: daysAgo(3),
     updated_at: daysAgo(3),
-    checkpoint_seq: null,
-    checkpoint_pending_id: null,
-    checkpoint_at: null,
     ...partial,
   };
 }
@@ -106,11 +103,33 @@ function seedMaterial(partial: Partial<Material> & Pick<Material, "id" | "record
   };
 }
 
+/** 목업 DB의 문답 행 (qna_messages). 화면에는 QnaMessage 칸만 나간다 */
+export interface MockMessage extends QnaMessage {
+  record_id: Uuid;
+  daily_question_id: Uuid | null;
+  /** [다른 질문 보기]로 바뀐 질문. 응답 messages에서는 빠짐 */
+  is_replaced: boolean;
+}
+
+/** 이어 쓰기 기준점 (records.checkpoint_*). 서버 안에만 있고 응답에는 없음 */
+export interface MockCheckpoint {
+  seq: number;
+  pendingId: Uuid | null;
+  at: string;
+}
+
+/** 오늘의 질문 (daily_questions 행) */
+export interface MockDailyQuestion extends DailyQuestion {
+  question_date: string;
+}
+
 export interface MockDb {
   topics: Topic[];
-  dailyQuestions: DailyQuestion[];
+  dailyQuestions: MockDailyQuestion[];
   records: RecordItem[];
-  messages: QnaMessage[];
+  messages: MockMessage[];
+  /** 기록 id → 기준점 (임시 저장한 문답만) */
+  checkpoints: Record<Uuid, MockCheckpoint>;
   materials: Material[];
   /** 분석 중 기록: 시작 시각 (목업에서 몇 초 뒤 결과를 냄) */
   analyses: Record<Uuid, { requestId: number; startedAt: number }>;
@@ -118,7 +137,8 @@ export interface MockDb {
   candidates: Record<Uuid, MaterialCandidate>;
   suggestion: SuggestionCard | null;
   nextRequestId: number;
-  userStarted: boolean;
+  /** 첫 실행 동의 시각 (users.ai_consent_at). null이면 동의 전 → GET /me 404 */
+  consentAt: string | null;
   /** 중복 저장 막기: save_token → 저장된 기록 id (목록 17번 ⑨) */
   saveTokens: Record<string, Uuid>;
 }
@@ -144,9 +164,6 @@ function createDb(): MockDb {
     created_at: minutesAgo(20),
     saved_at: null,
     updated_at: draftQnaAt,
-    checkpoint_seq: 3,
-    checkpoint_pending_id: "msg-draft-3",
-    checkpoint_at: draftQnaAt,
   });
 
   return {
@@ -170,6 +187,7 @@ function createDb(): MockDb {
       seedMaterial({ id: "mat-sample-2", record_id: r2.id, title: "퇴근길 노을", summary: "노을을 보며 떠올린 엄마와의 기억", evidence: "작년에 엄마랑 같이 본 노을이 생각났다.", keywords: ["노을", "퇴근길"], topic_ids: [topicId("일상"), topicId("가족")], created_at: daysAgo(2) }),
       seedMaterial({ id: "mat-sample-3", record_id: r3.id, title: "이사 첫날 밤의 통화", summary: "독립한 첫날 밤 엄마의 걱정", evidence: "밥은 먹었냐고, 문단속 잘하라고 하셨어요.", keywords: ["이사", "통화"], topic_ids: [topicId("가족")], created_at: daysAgo(4) }),
     ],
+    checkpoints: { [draftQna.id]: { seq: 3, pendingId: "msg-draft-3", at: draftQnaAt } },
     analyses: {},
     candidates: {
       [pendingReview.id]: { title: "이사 첫날", summary: "짐 사이에서 먹은 첫 끼", evidence: "바닥에 앉아 컵라면을 먹었다.", keywords: ["이사", "컵라면"], topic_ids: [topicId("일상")] },
@@ -188,7 +206,7 @@ function createDb(): MockDb {
       ],
     },
     nextRequestId: 1,
-    userStarted: false,
+    consentAt: null,
     saveTokens: {},
   };
 }
@@ -213,6 +231,7 @@ export function clearUserData() {
   const d = getDb();
   d.records = [];
   d.saveTokens = {};
+  d.checkpoints = {};
   d.messages = [];
   d.materials = [];
   d.analyses = {};

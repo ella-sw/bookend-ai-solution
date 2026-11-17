@@ -8,6 +8,7 @@ import {
   getHomeSummary,
   getActiveQna,
   getFreeDraft,
+  getMe,
   getMaterialsOverview,
   getQnaDraft,
   getTodayQuestions,
@@ -74,9 +75,9 @@ export default function DevMockPage() {
     run("첫 답변 → 임시 저장", async () => {
       const questions = await getTodayQuestions();
       if (!questions.ok) return questions;
-      const started = await startQna({ daily_question_id: questions.data[0].id, answer: "시험 답변이에요." });
+      const started = await startQna({ daily_question_id: questions.data.questions[0].id, answer: "시험 답변이에요." });
       if (!started.ok) return started;
-      return saveQnaDraft(started.data.record.id);
+      return saveQnaDraft(started.data.record_id);
     });
 
   return (
@@ -158,6 +159,9 @@ export default function DevMockPage() {
           <div className="grid grid-cols-2 gap-2">
             <Button variant="secondary" disabled={running} onClick={() => run("첫 실행 동의", startWithConsent)}>
               첫 실행 동의
+            </Button>
+            <Button variant="secondary" disabled={running} onClick={() => run("내 정보", getMe)}>
+              내 정보 (GET /me)
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("홈", getHomeSummary)}>
               홈

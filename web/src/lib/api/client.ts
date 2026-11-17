@@ -10,11 +10,33 @@ import type { MockKey } from "./mock/keys";
 export type ApiErrorKind = "network" | "timeout" | "server" | "not_found" | "conflict" | "bad_request";
 
 /**
- * 서버가 응답 본문에 넣어 주는 오류 코드. 같은 kind(예: not_found) 안에서 상황을 나눌 때 쓴다.
- * - draft_not_found: 이어 쓰던 임시 저장이 없거나 이미 저장됨 (POST /records/free/draft, 404)
+ * 서버(B FastAPI)가 응답 본문 detail에 넣어 주는 오류 코드. 같은 kind 안에서 상황을 나눌 때 쓴다.
+ * - 404 not_found: conversation_not_found(열린 문답 없음·이미 저장됨), draft_not_found(이어 쓰던 자유 기록
+ *   임시 저장이 없거나 이미 저장됨), no_draft(자유 기록 임시 저장 없음 — getFreeDraft가 null로 바꿈),
+ *   record_not_found, not_consented(GET /me: 동의 전 → O110)
+ * - 409 conflict: finished(답변 7개), not_pending_question(답을 기다리는 질문이 아님), first_question_not_replaceable,
+ *   replace_limit(6회), not_draft, not_active, need_more_answers(답변 2개 전 저장)
+ * - 422 bad_request: invalid_daily_question, empty_body
+ * - 502 server: ai_failed (오늘의 질문 만들기 실패)
  * 모르는 코드도 그대로 받는다 (서버가 코드를 늘려도 화면이 깨지지 않게).
  */
-export type ApiErrorCode = "draft_not_found" | (string & {});
+export type ApiErrorCode =
+  | "conversation_not_found"
+  | "draft_not_found"
+  | "no_draft"
+  | "record_not_found"
+  | "not_consented"
+  | "finished"
+  | "not_pending_question"
+  | "first_question_not_replaceable"
+  | "replace_limit"
+  | "not_draft"
+  | "not_active"
+  | "need_more_answers"
+  | "invalid_daily_question"
+  | "empty_body"
+  | "ai_failed"
+  | (string & {});
 
 export interface ApiError {
   kind: ApiErrorKind;

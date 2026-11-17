@@ -4,7 +4,8 @@
  * 소재로 저장(records.free.save, qna.save)의 '분석 시작 실패'는 analysis.start 키의 상황(실패·연결 끊김·시간 초과)으로 고른다.
  */
 export const MOCK_KEYS = {
-  "user.start": "첫 실행 동의 (O110)",
+  "me.get": "내 정보 · 동의 여부 (첫 화면)",
+  "me.consent": "첫 실행 동의 (O110)",
   "home.get": "홈 데이터 (H110)",
   "topics.list": "주제 목록",
   "records.free.draft.get": "자유 기록 임시 저장 불러오기 (H121)",

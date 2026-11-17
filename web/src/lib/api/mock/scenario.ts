@@ -4,8 +4,8 @@ import type { MockKey } from "./keys";
  * 목업 상황 고르기.
  * - ok: 정상 / fail: 서버 오류 / network: 연결 끊김 / timeout: 시간 초과
  * - empty: 빈 결과 (분석이면 '소재 없음', 목록이면 빈 목록) / slow: 느리지만 성공
- * - ai_fail: AI 문답 답변(qna.start·qna.answer)은 저장되고 다음 질문만 실패 (next = null, next_failed = true).
- *   qna.next는 서버 오류. 다른 키는 정상과 같다
+ * - ai_fail: AI 문답에서 질문 만들기만 실패 → ai_failed = true (qna.start·answer·next·replace).
+ *   답변은 저장되고, [다른 질문 보기]는 기존 질문·횟수 그대로. 다른 키는 정상과 같다
  * 이 브라우저에만 저장된다 (개발용). 저장이 막힌 환경이면 기본값(ok)으로 동작.
  */
 export const MOCK_SCENARIOS = {
@@ -15,7 +15,7 @@ export const MOCK_SCENARIOS = {
   timeout: "시간 초과",
   empty: "빈 결과 · 소재 없음",
   slow: "느림 (성공)",
-  ai_fail: "AI 실패 (문답: 답변 저장, 다음 질문 없음)",
+  ai_fail: "AI 실패 (문답: ai_failed = true)",
 } as const;
 
 export type MockScenario = keyof typeof MOCK_SCENARIOS;

@@ -2,7 +2,8 @@
  * 서버와 주고받는 데이터 모양.
  * 기준: ERD v7 + docs/v6_이후_수정대기목록.md (목록이 우선). 칸 이름은 FastAPI·DB와 같은 snake_case.
  * - 목록 13·15번 (합의): events.share_method = copy / share_sheet. 취소·실패는 기록 안 함(share_result 칸 없음)
- * - 목록 17번 (합의): records.status에 active(진행 중) 추가, 이어 쓰기 기준점(checkpoint_*), 중복 저장 막기(save_token)
+ * - 목록 17번 (합의): records.status에 active(진행 중) 추가. 기록·문답·오늘의 질문 모양은 B 서버 코드
+ *   (feat/backend-setup server/app/routers/records.py·qna.py) 기준. 기준점(checkpoint_*)은 서버 안에만 있고 응답에 없음
  * - 목록 7번 (전달됨, 답 대기): materials.updated_at → 합의되면 Material에 추가
  * - 목록 16번 (전달됨, 답 대기): 서버 구조. 아래 '응답 묶음' 모양(HomeSummary 등)은 A의 임시안
  */
@@ -10,6 +11,16 @@
 export type Uuid = string;
 /** ISO 8601 시각 문자열 (timestamptz) */
 export type IsoTime = string;
+
+/* ---------- 사용자 ---------- */
+
+/** GET /me · POST /me/consent (B: Me) */
+export interface Me {
+  id: Uuid;
+  ai_consent_at: IsoTime | null;
+  last_seen_at: IsoTime;
+  data_cleared_at: IsoTime | null;
+}
 
 /* ---------- 주제 ---------- */
 
@@ -57,47 +68,54 @@ export interface RecordItem {
   saved_at: IsoTime | null;
   /** 마지막 활동. 문답이 추가되거나 바뀌면 갱신 → 1시간 이어 쓰기 기준 (목록 17번 ⑥) */
   updated_at: IsoTime;
-  /**
-   * 이어 쓰기 기준점 (AI 문답 임시 저장 때 기록, 목록 17번 ⑤).
-   * 되돌리기 = seq > checkpoint_seq 삭제 + checkpoint_pending_id 질문의 answer = null, is_replaced = false
-   */
-  checkpoint_seq: number | null;
-  /** 임시 저장 때 답을 기다리던 질문 id (없었으면 null) */
-  checkpoint_pending_id: Uuid | null;
-  checkpoint_at: IsoTime | null;
 }
 
+/** 오늘의 공통 첫 질문 하나 (B: DailyQuestion) */
 export interface DailyQuestion {
   id: Uuid;
-  question_date: string;
   /** 1~30 */
   seq: number;
   question: string;
 }
 
+/** GET /daily-questions/today (B: DailyQuestions). date = 오늘(KST) YYYY-MM-DD */
+export interface DailyQuestions {
+  date: string;
+  questions: DailyQuestion[];
+}
+
+/** 문답 한 줄 (B: Message). 바꾼 질문은 서버가 빼고 준다 */
 export interface QnaMessage {
   id: Uuid;
-  record_id: Uuid;
   seq: number;
   question: string;
   question_source: "daily" | "followup";
-  daily_question_id: Uuid | null;
   answer: string | null;
-  /** [다른 질문 보기]로 바뀐 질문 (답 없음) */
-  is_replaced: boolean;
 }
 
 /**
- * 진행 중 문답(GET /qna/active) · 임시 저장 문답(GET /qna/draft) 불러오기
+ * AI 문답 상태 (B: QnaState). 문답 API는 모두 이 모양 하나로 돌려준다.
+ * GET /qna/active·/qna/draft(없으면 null), POST /qna·/answers·/next·/replace·/draft·/discard-changes
  */
-export interface QnaSession {
-  record: RecordItem;
-  /** 바꾼 질문(is_replaced)도 포함, seq 순 */
+export interface QnaState {
+  record_id: Uuid;
+  /** 열린 대화만: active(진행 중) / draft(임시 저장) */
+  status: Extract<RecordStatus, "active" | "draft">;
+  updated_at: IsoTime;
+  /** seq 순. 바꾼 질문은 빠짐 */
   messages: QnaMessage[];
-  /** 답을 기다리는 질문. 없으면 null (AI 실패로 다음 질문을 못 받았거나, 답변 7개를 다 채움) */
-  pending: QnaMessage | null;
+  /** 답을 기다리는 질문. 없으면 null (AI 실패 또는 답변 7개를 다 채움) */
+  pending_question: QnaMessage | null;
+  /** 답변 수 (진행 3/7) */
+  answer_count: number;
   /** [다른 질문 보기] 남은 횟수 */
-  remaining_replaces: number;
+  replace_left: number;
+  /** 답변 7개 → 질문 마무리 W212 */
+  finished: boolean;
+  /** [소재로 저장] 가능 (답변 2개부터) */
+  can_save: boolean;
+  /** 다음(또는 바꿀) 질문을 만들지 못함 → [다시 시도] POST /qna/{id}/next. 답변은 저장돼 있음 */
+  ai_failed: boolean;
 }
 
 /** AI 문답 규칙 (ERD 데이터 규칙 10) */
@@ -107,35 +125,6 @@ export const QNA_RULES = {
   replaceLimit: 6,
   dailyQuestionCount: 30,
 } as const;
-
-export interface QnaAnswerResult {
-  /** 저장된 답변 (AI가 실패해도 답변은 저장됨) */
-  answered: QnaMessage;
-  /** 다음 후속 질문. 답변 7개가 찼거나(finished) AI가 실패하면(next_failed) null */
-  next: QnaMessage | null;
-  /** 다음 질문 만들기 실패 → POST /qna/{id}/next 로 다시 받는다 (목록 17번 ⑦) */
-  next_failed: boolean;
-  /** 답변 7개가 참 (질문 마무리 W212) */
-  finished: boolean;
-}
-
-/** 첫 답변 결과: 이때 문답 기록(status = active)이 처음 만들어진다 (목록 17번 ②) */
-export interface QnaFirstAnswerResult extends QnaAnswerResult {
-  record: RecordItem;
-  /** [다른 질문 보기] 남은 횟수 (처음 6) */
-  remaining_replaces: number;
-}
-
-/** [다른 질문 보기] 결과 — 목록 12번 (제안, C 합의 전 → 목업만) */
-export interface QnaReplaceResult {
-  message: QnaMessage;
-  remaining: number;
-}
-
-/** 다음 질문 다시 받기 결과 (POST /qna/{id}/next) */
-export interface QnaNextResult {
-  message: QnaMessage;
-}
 
 /* ---------- 소재 ---------- */
 

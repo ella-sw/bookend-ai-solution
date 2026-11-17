@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, type ApiResult } from "./client";
 import type { RecordItem } from "./types";
 
 /**
@@ -17,18 +17,20 @@ export function newSaveToken(): string {
 
 /**
  * H121 이어 쓰기 확인: 자유 기록 임시 저장 1개 (없으면 null).
- * 주의: 이 주소는 받은 B API 목록에 없음 — A 임시안. B와 확인 필요
+ * 서버는 없을 때 404 + code = "no_draft"를 준다 → 여기서 { ok: true, data: null }로 바꾼다
  */
-export function getFreeDraft() {
-  return request<RecordItem | null>({
+export async function getFreeDraft(): Promise<ApiResult<RecordItem | null>> {
+  const res = await request<RecordItem>({
     method: "GET",
     path: "/records/free/draft",
     mock: { key: "records.free.draft.get" },
   });
+  if (!res.ok && res.error.code === "no_draft") return { ok: true, data: null };
+  return res;
 }
 
 /**
- * W111 자유 기록 임시 저장. 방식별 1개만 — 같은 방식의 이전 임시 저장은 이때 덮어쓴다.
+ * W111 자유 기록 임시 저장. 방식별 1개만 — 이전 임시 저장이 있으면 그 기록을 덮어쓴다 (id 그대로).
  * 이어 쓰는 중(H121 [예])이면 record_id를 넣는다.
  * 그 임시 저장이 없거나 이미 저장됐으면 404 + error.code = "draft_not_found"
  * → 화면은 record_id 없이 새 임시 저장으로 다시 보내면 된다.
@@ -46,7 +48,9 @@ export function saveFreeDraft(input: { record_id?: string; title?: string | null
  * W110 [소재로 저장]: 원본을 저장한다. 이후 본문은 고칠 수 없다. 저장하면 서버가 분석을 시작한다.
  * - 이어 쓰기(H121 [예])로 연 임시 저장이면 record_id를 넣는다 → 그 임시 저장이 저장된 기록이 됨.
  *   새로 시작([아니오])했으면 비워 둔다 → 기존 임시 저장은 남음 (다음 임시 저장 때 덮어씀)
- * - save_token은 항상 보낸다 (newSaveToken). 같은 save_token이거나 이미 저장된 record_id면 200 + 그 기록
+ * - 본문이 비었으면(공백만) 422 + code = "empty_body"
+ * - save_token은 항상 보낸다 (newSaveToken). 같은 save_token이거나 이미 저장된 record_id면 200 + 그 기록.
+ *   record_id의 임시 저장이 없으면 404 draft_not_found
  * - 실패하면 입력을 그대로 둔 채 [다시 시도] (같은 save_token으로)
  * - 분석 시작이 실패해도 저장은 성공 → analysis_status = failed
  */
