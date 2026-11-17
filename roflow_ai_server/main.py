@@ -43,32 +43,22 @@ class ExtractRequest(BaseModel):
 def extract_material(req: ExtractRequest):
     system_prompt = """
     당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
-
-    [절대 규칙]
-    1. 팩트 유지: 원문에 없는 감정(예: 자신감 등)을 지어내거나, 사건의 장소나 순서를 절대 바꾸지 마세요. 중심 소재가 아닌 단순 배경 요소(예: 마시던 커피 등)는 키워드에서 제외하세요.
-    2. 근거 문장(evidence): 요약된 내용에 감정이 포함되어 있다면, 단편적인 행동만 발췌하지 말고 감정과 심리 상태가 드러난 원문 문장도 반드시 함께 발췌하세요.
-    3. 주제(topic_ids) 엄격 분류:
-       - '관계': 인물 간의 유대, 갈등, 관계의 변화가 중심일 때만 선택하세요. (단순한 일회성 친절이나 감사 표현만 있는 경우는 제외)
-       - '취향·취미': 해당 활동이나 선호 자체가 글의 중심 소재일 때만 선택하세요. (단순히 좋아하는 활동이 배경으로 등장한 경우는 제외)
-       - 반드시 다음 10개 중 1개 이상을 선택하세요: [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
-
     반드시 아래 JSON 형식으로만 응답하세요. 다른 말은 덧붙이지 마세요.
     {
-        "title": "추출된 소재의 핵심을 담은 짧은 제목",
         "summary": "핵심 내용을 1문장으로 요약",
         "keywords": ["핵심단어1", "핵심단어2", "핵심단어3"],
-        "topic_ids": ["선택된 주제1", "선택된 주제2"],
-        "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
+        "topic": "가족" 
     }
+    - 주의: topic은 반드시 '가족', '일상', '일' 중 가장 알맞은 1개만 선택해야 합니다.
     """
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": req.record_text}
         ],
         response_format={"type": "json_object"}, 
-        # temperature=0.3 
+        temperature=0.3 
     )
     return json.loads(response.choices[0].message.content)
 
@@ -82,19 +72,18 @@ class QnARequest(BaseModel):
 def get_next_question(req: QnARequest):
     system_prompt = """
     당신은 사용자의 일상과 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
-    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 꼬리 질문을 작성하세요.
+    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 '단 하나의 꼬리 질문'만 작성하세요.
     
     [절대 규칙]
     1. 반드시 아래 JSON 형식으로만 응답할 것.
     {
         "next_question": "생성된 질문 내용"
     }
-    2. 복합 질문 절대 금지: 한 번의 응답에는 오직 1개의 물음표(?)만 사용하세요. (예: "A는 무엇이고, B는 어땠나요?"처럼 두 가지를 동시에 묻지 말고 가장 중요한 한 가지만 질문하세요.)
-    3. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
+    2. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
     """
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=messages,
         response_format={"type": "json_object"}, 
         # temperature=0.7 
@@ -140,7 +129,7 @@ def get_alternative_question(req: QnAAltRequest):
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
     
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=messages,
         response_format={"type": "json_object"}, 
         # temperature=0.8  # 다양한 질문이 나오도록 창의성(온도)을 살짝 높이는 것을 권장합니다.
@@ -178,7 +167,7 @@ def generate_draft(req: DraftRequest):
     user_prompt = f"- 글의 방향: {req.direction}\n- 소재 목록: {req.materials}"
     
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -212,7 +201,7 @@ def retouch_draft(req: RetouchRequest):
     """
     user_prompt = f"- 기존 초안:\n{req.original_draft}\n- 처음 고른 소재:\n{req.selected_materials}"
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -247,7 +236,7 @@ def recommend_proposal(req: ProposalRequest):
     user_prompt = f"- 선택된 소재 목록:\n{req.materials}"
     
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
