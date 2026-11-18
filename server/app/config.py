@@ -22,7 +22,9 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        # Browsers send the origin without a trailing slash ("https://x.vercel.app"),
+        # so "https://x.vercel.app/" copied from the address bar would never match.
+        return [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
 
 
 @lru_cache

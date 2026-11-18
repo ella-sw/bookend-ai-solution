@@ -88,3 +88,30 @@ uv run ruff check .
 - [x] 관련 소재 추천 GET /materials/related (R29, AI 없이 주제·키워드)
 - [ ] AI 초안·다시 만들기 (R07, C), 하루 호출 한도 (R32)
 - [ ] 배포 (Render / Railway / Fly.io)
+
+## 배포 (Render)
+
+Render 대시보드 → New → Web Service → GitHub 저장소 `ella-sw/bookend-ai-solution`
+
+| 설정 | 값 |
+|---|---|
+| Branch | `feat/backend-setup` (main에 합친 뒤에는 `main`) |
+| Root Directory | `server` |
+| Runtime | Python 3 (`.python-version` = 3.12) |
+| Region | Singapore (Supabase 서울과 가장 가까움) |
+| Build Command | `pip install uv && uv sync --frozen --no-dev` |
+| Start Command | `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Health Check Path | `/health` |
+
+Environment Variables (값은 대시보드에만 넣고 커밋하지 않는다):
+
+| 이름 | 값 |
+|---|---|
+| `DATABASE_URL` | `.env`와 같은 Session pooler 주소 |
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `CORS_ORIGINS` | `http://localhost:3000,https://bookend-ai-solution.vercel.app` |
+| `AI_PROVIDER` | `stub` (C의 AI가 들어오면 `openai` + `OPENAI_API_KEY`) |
+
+- 무료 요금제는 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
+- 배포 확인: `https://<서비스 주소>/health` → `{"status":"ok"}`, `/docs`
+- DB 구조 변경은 배포와 별개로 `supabase db push --remote`로 반영한다.

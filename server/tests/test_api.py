@@ -55,3 +55,9 @@ def test_each_user_sees_only_themselves(client, make_user):
     a, b = make_user(), make_user(consented=False)
     assert client.get("/me", headers=auth(a)).json()["id"] == str(a)
     assert client.get("/me", headers=auth(b)).status_code == 404  # A's row is not visible to B
+
+
+def test_cors_origins_ignore_trailing_slash():
+    from app.config import Settings
+    s = Settings(database_url="x", cors_origins=" http://localhost:3000/ ,https://a.vercel.app/,")
+    assert s.cors_origin_list == ["http://localhost:3000", "https://a.vercel.app"]
