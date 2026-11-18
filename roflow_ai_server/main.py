@@ -9,8 +9,9 @@ from dotenv import load_dotenv
 # .env 파일에 적어둔 API 키를 불러옵니다.
 load_dotenv()
 client = OpenAI(
-    api_key=os.getenv("ELICE_API_KEY"),
-    base_url=os.getenv("ELICE_BASE_URL")
+    api_key=os.getenv("OPENAI_API_KEY")
+    # api_key=os.getenv("ELICE_API_KEY"),
+    # base_url=os.getenv("ELICE_BASE_URL")
 )
 
 app = FastAPI(title="Rowflow AI API Server", version="1.0")
@@ -33,8 +34,6 @@ def read_root():
 
 # ==========================================
 # 1. 소재 추출 API (M120)
-# [피드백 ① 반영] 주제 10개 중 1개 이상 다중 선택 (배열 형태)
-# [피드백 ② 반영] 응답 항목에 title, evidence 추가
 # ==========================================
 class ExtractRequest(BaseModel):
     record_text: str  
@@ -51,19 +50,30 @@ def extract_material(req: ExtractRequest):
         "topic_ids": ["선택된 주제1", "선택된 주제2"],
         "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
     }
-    - 주의: topic_ids는 반드시 다음 10개 중 1개 이상을 선택해야 합니다. 
-      [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
+    [서버 검증 필수 통과 규칙]
+    1. topic_ids (주제): 반드시 다음 10개 중 1개 이상을 선택해야 합니다. 
+        [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
+    2. keywords (키워드 추천용): 추천 시스템 매칭을 위해 아래 세부 규칙을 엄격히 지켜 추출하세요.
+       - 조사 및 어미 제거: 명사형 단어만 남기세요. (예: "엄마랑" -> "엄마", "통화했다" -> "통화")
+       - 구절 금지 및 복합 명사 허용: "엄마의 반찬을 먹었다" 같은 서술어가 포함된 문장/구절은 절대 금지합니다. 단, "수면 부족", "회사 생활"처럼 의미 보존을 위해 꼭 필요한 '복합 명사'는 단일 명사로 쪼개지 말고 그대로 허용합니다.
+       - 엄격한 동의어 통일: "어머니"와 "엄마"처럼 문맥상 완벽히 동일한 대상을 지칭할 때만 대표 명사로 통일하세요. 의미가 비슷하더라도 뉘앙스가 다른 단어는 임의로 합치지 마세요.
     """
+
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": req.record_text}
         ],
         response_format={"type": "json_object"}, 
-        # temperature=0.3 
+        temperature=0.3 
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
 
 # ==========================================
 # 2. AI 다음 질문 생성 API (W210)
@@ -86,12 +96,56 @@ def get_next_question(req: QnARequest):
     """
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=messages,
         response_format={"type": "json_object"}, 
         # temperature=0.7 
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
+
+# ==========================================
+# 2-2. AI 다른 질문 보기 (재생성) API (W220)
+# ==========================================
+class QnAAltRequest(BaseModel):
+    chat_history: list
+    rejected_questions: list  # 사용자가 이미 본(스킵한) 질문들의 목록
+
+@app.post("/api/qna/alternative")
+def get_alternative_question(req: QnAAltRequest):
+    system_prompt = f"""
+    당신은 사용자의 일상과 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
+    사용자의 이전 대화 기록을 분석하여, 글감을 더 풍성하게 만들 수 있는 '새로운' 꼬리 질문을 작성하세요.
+    
+    [절대 규칙]
+    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    {{
+        "next_question": "생성된 질문 내용"
+    }}
+    2. 복합 질문 절대 금지: 한 번의 응답에는 오직 1개의 물음표(?)만 사용하세요.
+    3. 너무 뻔하거나 딱딱한 질문은 피하고, 구체적인 상황을 짚어주는 다정한 말투를 사용할 것.
+    4. [중요] 아래에 나열된 기존 질문들과 의미나 형태가 겹치지 않는 완전히 새로운 방향의 질문을 생성하세요.
+       - 제외할 기존 질문 목록: 
+       {req.rejected_questions}
+    """
+    messages = [{"role": "system", "content": system_prompt}] + req.chat_history
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        response_format={"type": "json_object"}, 
+        # temperature=0.8  # 다양한 질문이 나오도록 창의성(온도)을 살짝 높이는 것을 권장합니다.
+    )
+    
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
 
 # ==========================================
 # 3. AI 에세이 초안 생성 API (W330)
@@ -100,6 +154,7 @@ class DraftRequest(BaseModel):
     materials: list
     tone: str
     length: str
+    direction: str  # 추가된 파라미터 (글의 방향)
 
 @app.post("/api/essay/draft")
 def generate_draft(req: DraftRequest):
@@ -111,16 +166,18 @@ def generate_draft(req: DraftRequest):
     
     [절대 규칙]
     1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
-    2. 사용자가 요청한 문체({req.tone})로 작성하고, 분량은 반드시 **{length_guide}**로 작성하세요. 공백을 포함한 분량입니다.
-    3. 반드시 아래 JSON 형식으로만 응답하세요.
+    2. 사용자가 제시한 '글의 방향'을 글의 핵심 주제와 흐름으로 삼아 자연스럽게 전개하세요. (만약 빈칸이라면 소재들만 자연스럽게 엮어주세요)
+    3. 사용자가 요청한 문체({req.tone})로 작성하고, 분량은 반드시 **{length_guide}**로 작성하세요. 공백을 포함한 분량입니다.
+    4. 반드시 아래 JSON 형식으로만 응답하세요.
     {{
-        "draft_content": "작성된 에세이 초안 본문"
+        "essay_content": "작성된 에세이 초안 본문"
     }}
     """
-    user_prompt = f"- 소재 목록: {req.materials}"
+    # AI가 참고할 수 있도록 글의 방향을 추가해서 전달합니다.
+    user_prompt = f"- 글의 방향: {req.direction}\n소재 목록: \n{req.materials}"
     
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -129,32 +186,53 @@ def generate_draft(req: DraftRequest):
         # temperature=0.7
     )
     
-    return json.loads(response.choices[0].message.content)
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
 
 # ==========================================
 # 4. AI 글 다시 만들기 (재생성) API (W340)
-# [피드백 ③ 반영] feedback 입력칸 제거, '처음 고른 소재'를 파라미터로 받음
 # ==========================================
 class RetouchRequest(BaseModel):
-    original_draft: str        # 기존에 생성되었던 초안 내용
-    selected_materials: list   # 피드백 대신, 처음 고른 소재 리스트를 받음
+    current_draft: str          # 사용자가 화면에서 직접 수정한 에세이 본문
+    selected_materials: str     # 처음 고른 소재
+    tone: str                   # 예: "담담한", "감성적인"
+    length: str                 # 예: "짧게", "원래 길이 유지", "길게"
 
 @app.post("/api/essay/retouch")
 def retouch_draft(req: RetouchRequest):
     system_prompt = """
     당신은 에세이 전문 교정 편집자입니다.
-    사용자가 작성한 '기존 초안'과 글의 뼈대가 되는 '처음 고른 소재'를 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
+    사용자가 '직접 수정한 초안(current_draft)'을 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
     
+    [수정 지침]
+    1. 사용자가 직접 수정한 문장과 흐름, 의도를 최대한 보존하세요.
+    2. 사용자가 요청한 '문체(Tone)'와 '길이(Length)'에 맞춰 글을 매끄럽게 교정하세요.
+    3. '처음 고른 소재'에 없는 새로운 사실을 임의로 지어내지 마세요.
+
     [절대 규칙]
-    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    반드시 아래 JSON 형식으로만 응답할 것.
     {
         "retouched_content": "수정된 에세이 본문"
     }
-    2. 처음 고른 소재에 없는 지어낸 사실을 추가하지 말고, 전체적인 문맥이 어색해지지 않게 다듬을 것.
     """
-    user_prompt = f"- 기존 초안:\n{req.original_draft}\n- 처음 고른 소재:\n{req.selected_materials}"
+    
+    user_prompt = f"""- 사용자가 수정한 현재 초안:
+{req.current_draft}
+
+- 처음 고른 소재:
+{req.selected_materials}
+
+- 적용할 문체: 
+{req.tone}
+- 목표 길이: 
+{req.length}
+"""
+
     response = client.chat.completions.create(
-        model="gpt-6-luna",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -162,4 +240,48 @@ def retouch_draft(req: RetouchRequest):
         response_format={"type": "json_object"},
         # temperature=0.7 
     )
-    return json.loads(response.choices[0].message.content)
+    
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
+
+# ==========================================
+# 5. 글쓰기 제안 API (N130)
+# ==========================================
+class ProposalRequest(BaseModel):
+    materials: list  # 사용자가 선택했거나 AI가 묶어준 소재 리스트
+
+@app.post("/api/proposal/recommend")
+def recommend_proposal(req: ProposalRequest):
+    system_prompt = """
+    당신은 사용자의 일상 기록(소재)들을 엮어서 한 편의 완성된 글을 쓸 수 있도록 기획안을 제안하는 전문 에디터입니다.
+    사용자가 제시한 소재들을 바탕으로 다음 3가지 항목을 작성해 주세요.
+    
+    [절대 규칙]
+    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    {
+        "title": "글의 핵심 주제를 담은 짧은 제목",
+        "reason": "왜 이 소재들을 묶어서 글을 쓰면 좋은지 사용자에게 설명하는 다정한 추천 이유",
+        "direction": "글을 어떻게 엮을지 구조를 지시하는 명확한 한 문장"
+    }
+    2. 'direction(글의 방향)'은 'title(제목)'을 다른 말로 단순 반복해서는 안 됩니다. AI가 실제로 초안을 작성할 때 뼈대가 될 수 있도록, 구체적인 전개 방식(예: 시간 순서, 두 사건의 대비, 특정 장면에서 시작 등)을 지시하세요.
+    """
+    user_prompt = f"- 선택된 소재 목록:\n{req.materials}"
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        response_format={"type": "json_object"},
+        # temperature=0.7
+    )
+    
+    # [백엔드 R32 대응] 토큰 사용량 추가
+    result = json.loads(response.choices[0].message.content)
+    result["input_tokens"] = response.usage.prompt_tokens
+    result["output_tokens"] = response.usage.completion_tokens
+    return result
