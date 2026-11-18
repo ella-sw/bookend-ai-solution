@@ -1,14 +1,12 @@
-import ScreenPlaceholder from "@/components/layout/ScreenPlaceholder";
-import { routes } from "@/lib/routes";
+import { Suspense } from "react";
+import AiStyleScreen from "@/components/aiDraft/AiStyleScreen";
+import { Loading } from "@/components/ui";
 
-/** W310 문체 선택 · W320 길이 선택 (한 화면 2단계) */
+/** W310 문체 선택 · W320 길이 선택 (한 화면 2단계). 주소 검색값(m·s·from·regen…)을 읽으므로 Suspense로 감싼다 */
 export default function DraftOptionsPage() {
   return (
-    <ScreenPlaceholder
-      id="W310 · W320"
-      title="AI 초안"
-      notes={["1단계 문체: 감성적 / 담백함", "2단계 길이: 단문 300~500자 / 장문 1,000~1,500자"]}
-      links={[{ label: "에세이 만들기 → 초안 결과", href: routes.draftResult }]}
-    />
+    <Suspense fallback={<Loading fullScreen />}>
+      <AiStyleScreen />
+    </Suspense>
   );
 }
