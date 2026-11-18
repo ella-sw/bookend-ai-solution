@@ -416,7 +416,9 @@ async def related_materials(
     """N110 '함께 쓰면 좋은 소재': 고른 소재와 주제나 키워드가 같은 보관 확정 소재.
 
     No AI call. Score = 2 × shared keywords + 1 × shared topics (keywords compared without
-    case and surrounding spaces); ties → newest first. Selected, deleted and unconfirmed
+    case and surrounding spaces); ties → newest first; at most 5 by default.
+    Criteria confirmed by 유진 (분석가) on 2026-11-18. Known limit, to be noted in the
+    quality review: exact keyword match misses similar words ("엄마" vs "어머니"). Selected, deleted and unconfirmed
     materials are left out. Nothing selected → []. 404 if a selected id is not the
     caller's usable material.
     """
