@@ -22,6 +22,13 @@ import { routes } from "@/lib/routes";
  *    - [다시 시도]도 startWithConsent(): 이미 만든 익명 사용자(세션)를 그대로 쓴다
  */
 export default function OnboardingPage() {
+  // 새로 들어올 때마다 처음(서비스 소개)부터. cacheComponents는 다녀온 화면의 state를 남겨 두므로
+  // key가 없으면 다시 왔을 때 '요청 중'으로 막힌 버튼·체크 상태가 남을 수 있다
+  const { bfcacheId } = useRouter();
+  return <Onboarding key={bfcacheId} />;
+}
+
+function Onboarding() {
   const [step, setStep] = useState<"intro" | "consent">("intro");
 
   return step === "intro" ? <Intro onNext={() => setStep("consent")} /> : <Consent onBack={() => setStep("intro")} />;

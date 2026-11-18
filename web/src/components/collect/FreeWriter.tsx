@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   BottomActionBar,
   BottomActionBarSpacer,
@@ -45,9 +45,18 @@ const titleOrNull = (title: string) => (title.trim() ? title : null);
  * - [소재로 저장]: 열 때 만든 save_token으로 저장 → M120. 실패하면 입력 유지 + [다시 시도](같은 save_token, 목록 17번 ⑨)
  * - 뒤로가기(헤더·브라우저·휴대폰): 마지막 임시 저장 뒤 바뀐 게 있으면 W113, 없으면 바로 나감
  * - 기록 시작 이벤트: 화면에 들어올 때마다 1번 (목록 23·24번)
+ *
+ * 새로 들어올 때마다 처음부터 시작한다 (key = bfcacheId + resume).
+ * cacheComponents는 다녀온 화면의 state를 남겨 두므로(Activity), key가 없으면 H121 [아니오]로 와도
+ * 전에 불러온 내용이 그대로 보인다. 브라우저 뒤로·앞으로 가기에서는 보존된다.
  */
-export default function FreeWriter() {
+export default function FreeWriterScreen() {
+  const { bfcacheId } = useRouter();
   const resume = useSearchParams().get("resume") === "draft";
+  return <FreeWriter key={`${bfcacheId}:${resume ? "draft" : "new"}`} resume={resume} />;
+}
+
+function FreeWriter({ resume }: { resume: boolean }) {
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
