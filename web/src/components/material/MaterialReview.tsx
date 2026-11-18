@@ -16,8 +16,11 @@ import {
 } from "@/components/ui";
 import {
   confirmMaterial,
+  deleteRecord,
   getOriginal,
+  keepOriginal,
   MATERIAL_RULES,
+  reanalyze,
   TOPICS,
   waitForAnalysis,
   type AnalysisMaterial,
@@ -26,11 +29,13 @@ import {
   type MaterialDetail,
   type Original,
 } from "@/lib/api";
-import { routes } from "@/lib/routes";
+import { collectRoutes, routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 /** 보관한 소재 (보관 완료 화면에 보여 줄 만큼) */
 type KeptMaterial = Pick<AnalysisMaterial, "id" | "title" | "summary" | "keywords" | "topics">;
+
+const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
 
 /** 고치는 칸 */
 type Form = { title: string; summary: string; keywords: string[]; topics: number[] };
@@ -67,6 +72,9 @@ function validate(form: Form): FieldErrors {
  * - done: 후보를 고쳐서 [소재함에 보관] → 보관 완료 ([이 소재로 바로 글쓰기] / [소재함으로])
  *   이미 보관된 소재로 열면 처음부터 보관 완료
  * - 뒤로가기: 고친 내용이 있으면 '고친 내용은 저장되지 않아요' 확인 1번 (보관하지 않은 소재는 확인 대기에 남음)
+ * - empty (목록 21번): 안내 + [새로 기록하기]/[새 대화 시작하기](keepOriginal 뒤 새로 시작) + [기록 삭제].
+ *   [직접 정리하기]·[다시 분석]·[원본만 보관]은 두지 않음
+ * - failed: [다시 분석](can_reanalyze, 하루 한도면 막고 안내) / [직접 정리하기] / [원본만 보관]
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + recordId)
  */
@@ -93,6 +101,13 @@ function MaterialReview({ recordId }: { recordId: string }) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saving, setSaving] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  /** 실패 뒤 [직접 정리하기] 중 */
+  const [manual, setManual] = useState(false);
+  /** 다시 분석·원본만 보관·기록 삭제·새로 시작 요청 중 */
+  const [acting, setActing] = useState<"reanalyze" | "keep" | "delete" | "restart" | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  /** 삭제 확인에서 [지우기]를 골랐나. 팝업이 다 닫힌 뒤 지운다 */
+  const deleteChosen = useRef(false);
   /** 나가기 확인에서 [나가기]를 골랐나. 팝업이 다 닫힌 뒤(뒤로가기 기록 정리 뒤) 나간다 */
   const leaveChosen = useRef(false);
   const busy = useRef(false);
@@ -142,7 +157,8 @@ function MaterialReview({ recordId }: { recordId: string }) {
 
   /* ---------- 나가기 ---------- */
 
-  const dirty = state?.analysis_status === "done" && !kept && !sameForm(form, initialForm);
+  const editing = !kept && (manual || state?.analysis_status === "done");
+  const dirty = editing && !sameForm(form, initialForm);
   const { leave } = useLeaveGuard({ dirty, onBlocked: () => setLeaveOpen(true) });
 
   const requestLeave = () => {
@@ -194,6 +210,89 @@ function MaterialReview({ recordId }: { recordId: string }) {
       return;
     }
     toast("보관하지 못했어요");
+  };
+
+  /* ---------- 소재 없음·실패 ---------- */
+
+  const run = async <T,>(kind: NonNullable<typeof acting>, fn: () => Promise<T>) => {
+    if (busy.current) return null;
+    busy.current = true;
+    setActing(kind);
+    const result = await fn();
+    busy.current = false;
+    setActing(null);
+    return result;
+  };
+
+  /** [새로 기록하기]/[새 대화 시작하기]: 지금 기록은 '원본만 보관'으로 남기고 새로 시작 (실패해도 이동) */
+  const restart = async () => {
+    const res = await run("restart", () => keepOriginal(recordId));
+    if (res === null) return;
+    if (!res.ok && goOnboardingIfNeeded(res.error)) return;
+    leave(state?.record_type === "qna" ? collectRoutes.ai() : collectRoutes.free());
+  };
+
+  const removeRecord = async () => {
+    const res = await run("delete", () => deleteRecord(recordId));
+    if (res === null) return;
+    if (res.ok) {
+      toast("기록을 지웠어요");
+      leave(routes.home);
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    toast(res.error.code === "material_confirmed" || res.error.code === "material_deleted" ? "이 기록은 지울 수 없어요" : "지우지 못했어요");
+  };
+
+  const keepOnly = async () => {
+    const res = await run("keep", () => keepOriginal(recordId));
+    if (res === null) return;
+    if (res.ok) {
+      leave(routes.materials);
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    if (res.error.code === "material_deleted") {
+      toast("이미 삭제한 소재예요");
+      leave(routes.materials);
+      return;
+    }
+    toast("보관하지 못했어요");
+  };
+
+  const retryAnalysis = async () => {
+    const res = await run("reanalyze", () => reanalyze(recordId));
+    if (res === null) return;
+    if (res.ok) {
+      applyState(res.data);
+      setSlow(false);
+      setWaitAttempt((n) => n + 1); // 다시 기다리기
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    if (res.error.code === "daily_limit") {
+      toast(LIMIT_MESSAGE);
+      setState((s) => (s ? { ...s, daily_limit_reached: true } : s));
+      return;
+    }
+    if (res.error.code === "material_deleted") {
+      toast("이미 삭제한 소재예요");
+      leave(routes.materials);
+      return;
+    }
+    if (res.error.code === "cannot_reanalyze") {
+      setWaitAttempt((n) => n + 1); // 상태가 바뀜 → 다시 불러오기
+      return;
+    }
+    toast("다시 분석하지 못했어요");
+  };
+
+  const startManual = () => {
+    const empty = formOf(null);
+    setForm(empty);
+    setInitialForm(empty);
+    setErrors({});
+    setManual(true);
   };
 
   /* ---------- 화면 ---------- */
@@ -249,15 +348,24 @@ function MaterialReview({ recordId }: { recordId: string }) {
     );
   }
 
-  if (state.analysis_status === "done" && state.material) {
+  // 고치는 칸: 후보 확인(done) 또는 직접 정리하기
+  if (editing) {
+    const candidate = !manual ? state.material : null;
     return (
       <>
         {header}
         <div className="flex flex-col gap-6 px-5 pt-5">
-          <p className="text-[15px] font-semibold">이 기록에서 찾은 소재예요. 고쳐도 돼요.</p>
+          <p className="text-[15px] font-semibold">
+            {manual ? "기록을 보고 소재를 직접 정리해 보세요." : "이 기록에서 찾은 소재예요. 고쳐도 돼요."}
+          </p>
           <MaterialFields form={form} setForm={setForm} errors={errors} disabled={saving} />
-          <Evidence recordId={recordId} evidence={state.material.evidence} />
+          <Evidence recordId={recordId} evidence={candidate?.evidence ?? null} />
           {errors.form && <p className="text-sm text-danger">{errors.form}</p>}
+          {manual && (
+            <button type="button" onClick={() => setManual(false)} disabled={saving} className="self-start text-sm text-ink-mute underline">
+              돌아가기
+            </button>
+          )}
         </div>
         <BottomActionBarSpacer />
         <BottomActionBar>
@@ -271,7 +379,7 @@ function MaterialReview({ recordId }: { recordId: string }) {
           open={leaveOpen}
           onClose={onLeaveDialogClosed}
           title="고친 내용은 저장되지 않아요"
-          description="보관하지 않은 소재는 소재함 '확인 대기'에 남아요."
+          description={manual ? "보관하지 않은 기록은 소재함 '확인 대기'에 남아요." : "보관하지 않은 소재는 소재함 '확인 대기'에 남아요."}
           actions={[
             { label: "계속 고치기", onClick: () => (leaveChosen.current = false) },
             { label: "나가기", variant: "primary", onClick: () => (leaveChosen.current = true) },
@@ -281,15 +389,76 @@ function MaterialReview({ recordId }: { recordId: string }) {
     );
   }
 
-  // 소재 없음·실패 (커밋 C에서 버튼을 붙인다)
+  // 소재 없음 (목록 21번): 새로 쓰기 또는 삭제로 단순화
+  if (state.analysis_status === "empty") {
+    const restartLabel = state.record_type === "qna" ? "새 대화 시작하기" : "새로 기록하기";
+    return (
+      <>
+        {header}
+        <section className="flex flex-1 flex-col justify-center gap-3 px-6">
+          <p className="text-lg font-bold">소재를 찾지 못했어요</p>
+          <p className="text-[15px] leading-relaxed text-ink-soft">
+            이 기록에서는 글감을 찾기 어려웠어요. 기억나는 장면이나 대화를 조금 더 자세히 남겨 보세요.
+          </p>
+        </section>
+        <BottomActionBarSpacer height="8rem" />
+        <BottomActionBar>
+          <div className="flex flex-col gap-2">
+            <Button block size="lg" loading={acting === "restart"} disabled={acting !== null} onClick={() => void restart()}>
+              {restartLabel}
+            </Button>
+            <Button block variant="ghost" loading={acting === "delete"} disabled={acting !== null} onClick={() => setDeleteOpen(true)}>
+              기록 삭제
+            </Button>
+          </div>
+        </BottomActionBar>
+
+        <ConfirmDialog
+          open={deleteOpen}
+          onClose={() => {
+            setDeleteOpen(false);
+            if (deleteChosen.current) {
+              deleteChosen.current = false;
+              void removeRecord();
+            }
+          }}
+          title="이 기록을 지울까요?"
+          description="지운 기록은 되돌릴 수 없어요."
+          actions={[
+            { label: "취소", onClick: () => (deleteChosen.current = false) },
+            { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
+          ]}
+        />
+      </>
+    );
+  }
+
+  // 분석 실패 (오류·시간 초과·하루 한도)
+  const limit = state.daily_limit_reached;
   return (
     <>
       {header}
-      <section className="flex flex-1 flex-col justify-center gap-2 px-6 text-center">
-        <p className="text-[15px] font-semibold">
-          {state.analysis_status === "empty" ? "소재를 찾지 못했어요" : "분석하지 못했어요."}
-        </p>
+      <section className="flex flex-1 flex-col justify-center gap-3 px-6">
+        <p className="text-lg font-bold">분석하지 못했어요.</p>
+        <p className="text-[15px] text-ink-soft">원본 기록은 저장돼 있어요.</p>
+        {limit && <p className="rounded-xl bg-subtle px-4 py-3 text-sm text-ink-soft">{LIMIT_MESSAGE}</p>}
       </section>
+      <BottomActionBarSpacer height="11rem" />
+      <BottomActionBar>
+        <div className="flex flex-col gap-2">
+          {(state.can_reanalyze || limit) && (
+            <Button block size="lg" loading={acting === "reanalyze"} disabled={limit || acting !== null} onClick={() => void retryAnalysis()}>
+              다시 분석
+            </Button>
+          )}
+          <Button block variant="secondary" disabled={acting !== null} onClick={startManual}>
+            직접 정리하기
+          </Button>
+          <Button block variant="ghost" loading={acting === "keep"} disabled={acting !== null} onClick={() => void keepOnly()}>
+            원본만 보관
+          </Button>
+        </div>
+      </BottomActionBar>
     </>
   );
 }
