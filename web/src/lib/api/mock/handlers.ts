@@ -1,13 +1,14 @@
 import { apiError, readErrorCode, type ApiErrorCode, type ApiErrorKind, type ApiResult, type RequestOptions } from "../client";
 import type {
-  AnalysisResult,
+  AnalysisMaterial,
+  AnalysisState,
+  ConfirmMaterialInput,
   DailyQuestions,
   HomeSummary,
   Material,
-  MaterialConfirmInput,
   MaterialDetail,
-  MaterialManualInput,
   MaterialsOverview,
+  Original,
   Me,
   PendingCardStatus,
   QnaMessage,
@@ -15,7 +16,7 @@ import type {
   RecordItem,
   RecordType,
 } from "../types";
-import { QNA_RULES } from "../types";
+import { MATERIAL_RULES, QNA_RULES, TOPICS } from "../types";
 import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
@@ -26,10 +27,8 @@ import { clearUserData, FOLLOWUP_QUESTIONS, getDb, newId, now, topicId, type Moc
  * 목업 응답. 모양·오류 코드는 B 서버(feat/backend-setup server/app/routers/*.py)와 같게 맞춘다.
  */
 
-/** 목업에서 분석이 끝나기까지 걸리는 시간 (실제 목표 10~20초를 짧게 줄임) */
-const MOCK_ANALYSIS_MS = 3_000;
-/** 목업의 '60초 시간 초과'를 줄인 값 ('시간 초과' 상황을 오래 기다리지 않고 확인하려고). 실제 서버는 60초 */
-const MOCK_ANALYSIS_TIMEOUT_MS = Math.min(ANALYSIS_TIMEOUT_MS, 8_000);
+/** 분석 결과가 나오기까지의 조회 횟수 (목업: 2~4번째 조회에서 결과) */
+const randomPollsNeeded = () => 2 + Math.floor(Math.random() * 3);
 const SLOW_EXTRA_MS = 2_500;
 const TIMEOUT_WAIT_MS = 3_000;
 
@@ -68,10 +67,6 @@ interface Ctx {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ---------- 도움 함수 ---------- */
-
-function findRecord(id: string): RecordItem {
-  return getDb().records.find((r) => r.id === id) ?? fail("not_found", "record_not_found");
-}
 
 /** 열린 문답(active·draft)만. 없거나 저장됐으면 404 conversation_not_found (B: _lock_open_record) */
 function findOpenQna(id: string): RecordItem {
@@ -156,8 +151,8 @@ function removeRecords(ids: string[]) {
   for (const id of ids) {
     delete db.checkpoints[id];
     delete db.analyses[id];
-    delete db.candidates[id];
   }
+  db.materials = db.materials.filter((m) => !ids.includes(m.record_id));
 }
 
 /** 같은 방식·같은 status인 기록 id (방식별 active·draft는 1개) */
@@ -229,51 +224,55 @@ function cardStatus(record: RecordItem): PendingCardStatus | null {
   }
 }
 
-/** 분석 중인 기록이면 시간이 지났는지 보고 결과를 낸다 (목업 전용) */
+/**
+ * 분석 중인 기록의 결과를 낸다 (목업 전용). 상황은 analysis.get 키로 고른다
+ * - 정상: 2~4번째 조회에서 done (확정 전 소재를 만든다) / 빈 결과: empty / 실패: failed
+ * - 시간 초과: 결과 없이 분석 중 → 시작 후 60초가 지나면 failed (서버 규칙, 판단은 서버가 함)
+ */
 function settleAnalysis(record: RecordItem, scenario: MockScenario) {
   const db = getDb();
   const running = db.analyses[record.id];
   if (!running || record.analysis_status !== "analyzing") return;
-  const elapsed = Date.now() - running.startedAt;
-
-  // 서버 규칙: 60초가 지나면 시간 초과 실패 (ERD 규칙 3). 판단은 서버(여기)가 한다. 목업은 8초로 줄임
-  if (elapsed >= MOCK_ANALYSIS_TIMEOUT_MS) {
+  if (Date.now() - running.startedAt >= ANALYSIS_TIMEOUT_MS) {
     delete db.analyses[record.id];
     record.analysis_status = "failed";
-    failureReasons[record.id] = "timeout";
     return;
   }
-  // 'timeout' 상황: 결과를 내지 않고 계속 분석 중 → 60초 뒤 위에서 시간 초과
   if (scenario === "timeout") return;
-  if (elapsed < MOCK_ANALYSIS_MS) return;
+  if (running.polls < running.pollsNeeded) return;
 
   delete db.analyses[record.id];
   if (scenario === "empty") {
     record.analysis_status = "empty";
   } else if (scenario === "fail") {
     record.analysis_status = "failed";
-    failureReasons[record.id] = "error";
   } else {
     record.analysis_status = "done";
-    db.candidates[record.id] = makeCandidate(record);
+    putCandidate(record);
   }
 }
-const failureReasons: Record<string, "error" | "timeout"> = {};
 
-/** 분석 시작 (목업: 시작 시각만 기록하고 몇 초 뒤 결과를 냄) */
+/** 분석 시작 (목업: 시작 시각·필요한 조회 횟수만 기록). 이전 후보(확정 전 소재)는 버린다 */
 function runAnalysis(record: RecordItem) {
   const db = getDb();
   const requestId = db.nextRequestId++;
   record.analysis_status = "analyzing";
-  db.analyses[record.id] = { requestId, startedAt: Date.now() };
-  delete db.candidates[record.id];
-  delete failureReasons[record.id];
+  db.analyses[record.id] = { requestId, startedAt: Date.now(), polls: 0, pollsNeeded: randomPollsNeeded() };
+  db.materials = db.materials.filter((m) => m.record_id !== record.id || m.confirmed_at || m.deleted_at);
   return requestId;
 }
 
 /**
+ * 오늘 AI 호출을 다 썼나 (B R32). 목업: analysis.start 키의 상황이 '하루 한도'면 true
+ * → 저장 때 분석이 failed + 한도 표시, 다시 분석은 429 daily_limit
+ */
+function analysisLimitReached() {
+  return scenarioFor("analysis.start") === "daily_limit";
+}
+
+/**
  * 저장 확정 + 분석 시작 (B: start_analysis_after). 시작이 실패해도 저장은 성공 → analysis_status = failed.
- * 목업: analysis.start 키의 상황이 실패·연결 끊김·시간 초과면 '시작 실패'
+ * 목업: analysis.start 키의 상황이 실패·연결 끊김·시간 초과·하루 한도면 '시작 실패'
  */
 function markSaved(record: RecordItem) {
   const t = now();
@@ -282,13 +281,115 @@ function markSaved(record: RecordItem) {
   record.updated_at = t;
   delete getDb().checkpoints[record.id];
   const s = scenarioFor("analysis.start");
-  if (s === "fail" || s === "network" || s === "timeout") {
+  if (s === "fail" || s === "network" || s === "timeout" || s === "daily_limit") {
     record.analysis_status = "failed";
-    failureReasons[record.id] = "error";
   } else {
     runAnalysis(record);
   }
   return record;
+}
+
+const topicRefs = (ids: number[]) =>
+  TOPICS.filter((t) => ids.includes(t.id)).map((t) => ({ id: t.id, name: t.name as string }));
+
+/** 이 기록의 소재 (삭제하지 않은 것: 후보 또는 보관한 소재) */
+function materialOf(recordId: string) {
+  return getDb().materials.find((m) => m.record_id === recordId && !m.deleted_at) ?? null;
+}
+
+function materialDeleted(recordId: string) {
+  return getDb().materials.some((m) => m.record_id === recordId && m.deleted_at);
+}
+
+function toAnalysisMaterial(m: Material): AnalysisMaterial {
+  return {
+    id: m.id,
+    title: m.title,
+    summary: m.summary,
+    evidence: m.evidence,
+    keywords: m.keywords,
+    topics: topicRefs(m.topic_ids),
+    origin: m.origin,
+    confirmed_at: m.confirmed_at,
+  };
+}
+
+/** 저장된 기록만 (B: status = 'saved'). 없으면 404 record_not_found */
+function findSavedRecord(id: string): RecordItem {
+  const record = getDb().records.find((r) => r.id === id && r.status === "saved");
+  return record ?? fail("not_found", "record_not_found");
+}
+
+/** B analysis.py: _state */
+function analysisState(record: RecordItem): AnalysisState {
+  const m = materialOf(record.id);
+  return {
+    record_id: record.id,
+    record_type: record.type,
+    analysis_status: record.analysis_status,
+    original_kept_at: record.original_kept_at,
+    can_reanalyze: record.analysis_status === "failed" || record.analysis_status === "none",
+    daily_limit_reached: analysisLimitReached(),
+    material: m ? toAnalysisMaterial(m) : null,
+  };
+}
+
+/** B materials.py: _original */
+function originalOf(record: RecordItem): Original {
+  return {
+    record_id: record.id,
+    record_type: record.type,
+    title: record.title,
+    body: record.body,
+    messages: rowsOf(record.id)
+      .filter((m) => !m.is_replaced && m.answer !== null)
+      .map((m) => ({ seq: m.seq, question: m.question, answer: m.answer! })),
+    saved_at: record.saved_at,
+  };
+}
+
+/** B materials.py: _detail */
+function materialDetail(m: Material): MaterialDetail {
+  const record = findSavedRecord(m.record_id);
+  return {
+    id: m.id,
+    title: m.title,
+    summary: m.summary,
+    evidence: m.evidence,
+    keywords: m.keywords,
+    topics: topicRefs(m.topic_ids),
+    origin: m.origin,
+    confirmed_at: m.confirmed_at!,
+    user_edited_at: m.user_edited_at,
+    created_at: m.created_at,
+    original: originalOf(record),
+    essays: m.used_count > 0 ? [{ id: "essay-sample-1", title: "멀리 있어 더 또렷해진 것들" }] : [],
+    reanalysis: null,
+  };
+}
+
+/**
+ * B ConfirmIn 검사 (FastAPI 입력 검사: 422, 코드 없음). 주제 id가 없으면 422 unknown_topic.
+ * 앞뒤 공백을 지운 값을 돌려준다
+ */
+function checkConfirmInput(body: unknown) {
+  const input = (body ?? {}) as Partial<ConfirmMaterialInput>;
+  const title = typeof input.title === "string" ? input.title.trim() : null;
+  const summary = typeof input.summary === "string" ? input.summary.trim() : "";
+  const keywords = Array.isArray(input.keywords) ? input.keywords.map((k) => String(k).trim()) : [];
+  const topics = Array.isArray(input.topics) ? input.topics : [];
+  if (title !== null && title.length > MATERIAL_RULES.titleMax) fail("bad_request");
+  if (summary.length < 1 || summary.length > MATERIAL_RULES.summaryMax) fail("bad_request");
+  if (keywords.length > MATERIAL_RULES.keywordsMax) fail("bad_request");
+  if (keywords.some((k) => k.length < 1 || k.length > MATERIAL_RULES.keywordMax)) fail("bad_request");
+  if (topics.length < 1 || topics.length > MATERIAL_RULES.topicsMax) fail("bad_request");
+  if (topics.some((id) => !TOPICS.some((t) => t.id === id))) fail("bad_request", "unknown_topic");
+  return {
+    title: title || null,
+    summary,
+    keywords: Array.from(new Set(keywords)),
+    topics: Array.from(new Set(topics)).sort((x, y) => x - y),
+  };
 }
 
 function sourceText(record: RecordItem) {
@@ -299,16 +400,27 @@ function sourceText(record: RecordItem) {
     .join(" ");
 }
 
-function makeCandidate(record: RecordItem) {
+/** 분석 성공: 원문에서 후보를 만들어 확정 전 소재로 넣는다 (근거 문장은 원문의 첫 문장) */
+function putCandidate(record: RecordItem) {
+  const db = getDb();
   const text = sourceText(record).trim();
   const firstSentence = text.split(/(?<=[.!?。])\s+/)[0] ?? text;
-  return {
+  db.materials = db.materials.filter((m) => m.record_id !== record.id || m.confirmed_at || m.deleted_at);
+  db.materials.push({
+    id: newId(),
+    record_id: record.id,
     title: record.title?.trim() || firstSentence.slice(0, 16) || "오늘의 기록",
-    summary: firstSentence.slice(0, 40),
+    summary: firstSentence.slice(0, 40) || "오늘의 기록",
     evidence: firstSentence || null,
     keywords: Array.from(new Set(text.split(/\s+/).filter((w) => w.length >= 2))).slice(0, 3),
     topic_ids: [topicId("일상")],
-  };
+    origin: "ai",
+    confirmed_at: null,
+    user_edited_at: null,
+    deleted_at: null,
+    created_at: now(),
+    used_count: 0,
+  });
 }
 
 function newRecord(type: RecordType, status: RecordItem["status"], fields: Partial<RecordItem> = {}): RecordItem {
@@ -513,18 +625,26 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return markSaved(record);
   },
 
-  "records.keep": ({ params }): RecordItem => {
-    const record = findRecord(params.recordId);
-    record.original_kept_at = now();
-    return record;
+  // [원본만 보관] (B analysis.py keep_original). 두 번 불러도 안전
+  "records.keep": ({ params }): AnalysisState => {
+    const record = findSavedRecord(params.recordId);
+    if (materialOf(record.id)?.confirmed_at) fail("conflict", "material_confirmed");
+    if (materialDeleted(record.id)) fail("conflict", "material_deleted");
+    record.original_kept_at ??= now();
+    return analysisState(record);
   },
 
+  // M132 기록 삭제 (B materials.py delete_record): 보관 확정 소재가 없는 저장된 원본만. 204
   "records.delete": ({ params }) => {
-    const record = findRecord(params.recordId);
-    if (hasConfirmedMaterial(record.id)) fail("conflict"); // 보관 확정 소재가 있으면 지울 수 없음 (ERD 규칙 6)
+    const record = findSavedRecord(params.recordId);
+    const confirmed = getDb().materials.find((m) => m.record_id === record.id && m.confirmed_at);
+    if (confirmed) fail("conflict", confirmed.deleted_at ? "material_deleted" : "material_confirmed");
     removeRecords([record.id]);
     return null;
   },
+
+  // 원문 (읽기 전용, B materials.py get_original)
+  "records.original": ({ params }): Original => originalOf(findSavedRecord(params.recordId)),
 
   /* ----- AI 문답 (B: routers/qna.py, 목록 17번) ----- */
 
@@ -655,82 +775,70 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return null;
   },
 
-  // 다시 분석 (실패·M130 등). 첫 분석은 소재로 저장 때 서버가 시작한다
-  "analysis.start": ({ params }) => {
-    const record = findRecord(params.recordId);
-    if (record.status !== "saved") fail("bad_request");
-    if (hasConfirmedMaterial(record.id)) fail("conflict");
-    return { request_id: runAnalysis(record) };
+  // [다시 분석] (B analysis.py reanalyze): 실패일 때만. 분석 중이면 그대로 (200)
+  "analysis.start": ({ params }): AnalysisState => {
+    const record = findSavedRecord(params.recordId);
+    if (record.analysis_status === "analyzing") return analysisState(record);
+    if (materialDeleted(record.id)) fail("conflict", "material_deleted");
+    if (!analysisState(record).can_reanalyze) fail("conflict", "cannot_reanalyze");
+    if (analysisLimitReached()) fail("bad_request", "daily_limit", 429);
+    runAnalysis(record);
+    return analysisState(record);
   },
 
-  "analysis.get": ({ params, scenario }): AnalysisResult => {
-    const db = getDb();
-    const record = findRecord(params.recordId);
-    const running = db.analyses[record.id];
-    const requestId = running?.requestId ?? null;
-    const startedAt = running ? new Date(running.startedAt).toISOString() : null;
+  // M120 분석 상태 (B analysis.py get_analysis). 부를 때마다 조회 횟수를 센다 (목업)
+  "analysis.get": ({ params, scenario }): AnalysisState => {
+    const record = findSavedRecord(params.recordId);
+    const running = getDb().analyses[record.id];
+    if (running) running.polls += 1;
     settleAnalysis(record, scenario);
-    return {
-      record_id: record.id,
-      request_id: requestId,
-      started_at: startedAt,
-      status: record.analysis_status,
-      candidate: record.analysis_status === "done" ? (db.candidates[record.id] ?? makeCandidate(record)) : null,
-      failure_reason: record.analysis_status === "failed" ? (failureReasons[record.id] ?? "error") : null,
-    };
+    return analysisState(record);
   },
 
-  "material.confirm": ({ params, body }): Material => {
+  // [소재함에 보관] · [직접 정리하기] (B materials.py confirm_material). 이미 보관됐으면 그 소재 (200)
+  "material.confirm": ({ params, body }): MaterialDetail => {
     const db = getDb();
-    const record = findRecord(params.recordId);
-    if (record.analysis_status !== "done") fail("conflict");
-    const input = body as MaterialConfirmInput;
-    if (!input.title?.trim() || input.topic_ids.length === 0) fail("bad_request");
-    const candidate = db.candidates[record.id];
+    const record = findSavedRecord(params.recordId);
+    const input = checkConfirmInput(body);
+    if (materialDeleted(record.id)) fail("conflict", "material_deleted");
+    const existing = materialOf(record.id);
+    if (existing?.confirmed_at) return materialDetail(existing);
     const t = now();
-    const material: Material = {
-      id: newId(),
-      record_id: record.id,
-      ...input,
-      evidence: candidate?.evidence ?? null,
-      origin: "ai",
-      confirmed_at: t,
-      user_edited_at: null,
-      deleted_at: null,
-      created_at: t,
-      used_count: 0,
-    };
-    db.materials = db.materials.filter((m) => m.record_id !== record.id);
-    db.materials.push(material);
-    delete db.candidates[record.id];
-    return material;
-  },
-
-  // 목록 10번 (제안): 제목 필수, 주제 1개 이상, 요약·키워드 선택, 근거 문장 없음
-  "material.manual": ({ params, body }): Material => {
-    const db = getDb();
-    const record = findRecord(params.recordId);
-    const input = body as MaterialManualInput;
-    if (!input.title?.trim() || input.topic_ids.length === 0) fail("bad_request");
-    const t = now();
-    const material: Material = {
-      id: newId(),
-      record_id: record.id,
+    if (!existing) {
+      // [직접 정리하기]: 후보가 없으면 직접 쓴 값으로 새 소재 (근거 문장 없음)
+      const material: Material = {
+        id: newId(),
+        record_id: record.id,
+        title: input.title,
+        summary: input.summary,
+        evidence: null,
+        keywords: input.keywords,
+        topic_ids: input.topics,
+        origin: "manual",
+        confirmed_at: t,
+        user_edited_at: null,
+        deleted_at: null,
+        created_at: t,
+        used_count: 0,
+      };
+      db.materials.push(material);
+      return materialDetail(material);
+    }
+    // AI 후보를 (고쳐서) 보관
+    const edited =
+      input.title !== existing.title ||
+      input.summary !== existing.summary ||
+      input.keywords.join("\n") !== existing.keywords.join("\n") ||
+      input.topics.join(",") !== [...existing.topic_ids].sort((x, y) => x - y).join(",");
+    Object.assign(existing, {
       title: input.title,
-      summary: input.summary ?? "",
-      keywords: input.keywords ?? [],
-      topic_ids: input.topic_ids,
-      evidence: null,
-      origin: "manual",
+      summary: input.summary,
+      keywords: input.keywords,
+      topic_ids: input.topics,
       confirmed_at: t,
-      user_edited_at: null,
-      deleted_at: null,
-      created_at: t,
-      used_count: 0,
-    };
-    db.materials = db.materials.filter((m) => m.record_id !== record.id);
-    db.materials.push(material);
-    return material;
+      user_edited_at: edited ? t : null,
+    });
+    return materialDetail(existing);
   },
 
   "materials.list": ({ scenario }): MaterialsOverview => {
@@ -761,15 +869,8 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   },
 
   "material.get": ({ params }): MaterialDetail => {
-    const db = getDb();
-    const material = db.materials.find((m) => m.id === params.materialId && !m.deleted_at) ?? fail("not_found");
-    const record = findRecord(material.record_id);
-    return {
-      material,
-      record,
-      messages: db.messages.filter((m) => m.record_id === record.id && !m.is_replaced).map(toMessage),
-      essays: material.used_count > 0 ? [{ id: "essay-sample-1", title: "멀리 있어 더 또렷해진 것들" }] : [],
-    };
+    const material = getDb().materials.find((m) => m.id === params.materialId && m.confirmed_at && !m.deleted_at);
+    return materialDetail(material ?? fail("not_found", "material_not_found"));
   },
 
   "settings.clear": () => {

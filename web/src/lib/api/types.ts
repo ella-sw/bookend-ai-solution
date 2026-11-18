@@ -24,20 +24,30 @@ export interface Me {
 
 /* ---------- 주제 ---------- */
 
-/** 정해진 주제 10개 (ERD v7 topics) */
-export const TOPIC_NAMES = [
-  "가족",
-  "관계",
-  "나·성장",
-  "일·직업",
-  "일상",
-  "여행·장소",
-  "음식",
-  "취향·취미",
-  "몸·건강",
-  "자연·계절",
+/**
+ * 정해진 주제 10개. id는 B DB에 고정 (server/supabase/migrations/…_tables.sql), 순서도 그대로.
+ * B에는 주제 목록 API가 없으므로 화면은 이 값을 쓴다.
+ */
+export const TOPICS = [
+  { id: 1, name: "가족" },
+  { id: 2, name: "관계" },
+  { id: 3, name: "나·성장" },
+  { id: 4, name: "일·직업" },
+  { id: 5, name: "일상" },
+  { id: 6, name: "여행·장소" },
+  { id: 7, name: "음식" },
+  { id: 8, name: "취향·취미" },
+  { id: 9, name: "몸·건강" },
+  { id: 10, name: "자연·계절" },
 ] as const;
-export type TopicName = (typeof TOPIC_NAMES)[number];
+export type TopicName = (typeof TOPICS)[number]["name"];
+export const TOPIC_NAMES: readonly TopicName[] = TOPICS.map((t) => t.name);
+
+/** 응답 안의 주제 (B: Topic) */
+export interface TopicRef {
+  id: number;
+  name: string;
+}
 
 export interface Topic {
   id: number;
@@ -131,19 +141,121 @@ export const QNA_RULES = {
   dailyQuestionCount: 30,
 } as const;
 
-/* ---------- 소재 ---------- */
+/* ---------- 소재 확인 (M120) · 보관한 원본 (M130) — B routers/analysis.py·materials.py ---------- */
 
-export interface MaterialCandidate {
-  title: string;
+/** 분석이 찾은 소재 후보 또는 보관한 소재 (B analysis.py: Material) */
+export interface AnalysisMaterial {
+  id: Uuid;
+  title: string | null;
+  summary: string | null;
+  /** 근거 문장: 원문에 실제로 있는 문장 (직접 정리하면 null) */
+  evidence: string | null;
+  keywords: string[];
+  topics: TopicRef[];
+  origin: "ai" | "manual";
+  /** null = 후보 (보관 전) */
+  confirmed_at: IsoTime | null;
+}
+
+/** GET·POST /records/{id}/analysis, POST /records/{id}/keep-original (B: AnalysisState) */
+export interface AnalysisState {
+  record_id: Uuid;
+  /** free → [새로 기록하기], qna → [새 대화 시작하기] */
+  record_type: RecordType;
+  analysis_status: AnalysisStatus;
+  original_kept_at: IsoTime | null;
+  /** [다시 분석]을 보여 줄지 (failed·none일 때) */
+  can_reanalyze: boolean;
+  /** 오늘 AI 호출을 다 씀 (R32) → '오늘 사용할 수 있는 횟수를 다 썼어요' */
+  daily_limit_reached: boolean;
+  material: AnalysisMaterial | null;
+}
+
+/** 원문 (읽기 전용, B: Original). 문답은 답한 질문만 */
+export interface Original {
+  record_id: Uuid;
+  record_type: RecordType;
+  title: string | null;
+  /** 자유 기록 본문 */
+  body: string | null;
+  messages: { seq: number; question: string; answer: string }[];
+  saved_at: IsoTime | null;
+}
+
+/** 소재를 쓴 글 (B: EssayRef) */
+export interface EssayRef {
+  id: Uuid;
+  title: string | null;
+}
+
+/** 다시 분석 결과 후보 (B: Candidate) */
+export interface Candidate {
+  title: string | null;
+  summary: string;
+  evidence: string;
+  keywords: string[];
+  topics: TopicRef[];
+}
+
+/** M131 다시 분석 진행·결과 (B: Reanalysis) */
+export interface Reanalysis {
+  status: "analyzing" | "done" | "empty" | "failed";
+  /** done일 때 지금 소재 옆에 보여 줄 결과 */
+  result: Candidate | null;
+}
+
+/** 보관한 소재 상세 (B: MaterialDetail). POST /records/{id}/material, GET /materials/{id} */
+export interface MaterialDetail {
+  id: Uuid;
+  title: string | null;
+  summary: string | null;
+  evidence: string | null;
+  keywords: string[];
+  topics: TopicRef[];
+  origin: "ai" | "manual";
+  confirmed_at: IsoTime;
+  user_edited_at: IsoTime | null;
+  created_at: IsoTime;
+  original: Original;
+  essays: EssayRef[];
+  reanalysis: Reanalysis | null;
+}
+
+/** B ConfirmIn 제한 */
+export const MATERIAL_RULES = {
+  titleMax: 50,
+  summaryMax: 200,
+  keywordsMax: 10,
+  keywordMax: 30,
+  topicsMax: 10,
+} as const;
+
+/**
+ * [소재함에 보관] · [직접 정리하기] 입력 (B: ConfirmIn). 서버가 앞뒤 공백을 지운다
+ * - title: 선택, 50자 이하 (비우면 null)
+ * - summary: 필수, 1~200자
+ * - keywords: 10개 이하, 각 1~30자 (같은 것은 서버가 하나로)
+ * - topics: 주제 id 1~10개 (1개 이상)
+ */
+export interface ConfirmMaterialInput {
+  title?: string | null;
+  summary: string;
+  keywords: string[];
+  topics: number[];
+}
+
+/**
+ * 소재함·홈 목업이 쓰는 소재 모양 (A 임시안).
+ * M110·H110을 B(GET /materials의 MaterialCard)에 맞출 때 바꾼다.
+ */
+export interface Material {
+  id: Uuid;
+  record_id: Uuid;
+  title: string | null;
   summary: string;
   evidence: string | null;
   keywords: string[];
   topic_ids: number[];
-}
-
-export interface Material extends MaterialCandidate {
-  id: Uuid;
-  record_id: Uuid;
   origin: "ai" | "manual";
   confirmed_at: IsoTime | null;
   user_edited_at: IsoTime | null;
@@ -151,32 +263,6 @@ export interface Material extends MaterialCandidate {
   created_at: IsoTime;
   /** 이 소재를 쓴 글 수 (essay_materials에서 셈) */
   used_count: number;
-}
-
-export interface AnalysisResult {
-  record_id: Uuid;
-  request_id: number | null;
-  /** 분석 요청 시작 시각 (분석 중일 때). 화면은 이 시각 + 60초를 기준으로 기다린다 */
-  started_at: IsoTime | null;
-  status: AnalysisStatus;
-  /** status = done일 때 소재 후보 */
-  candidate: MaterialCandidate | null;
-  /** status = failed일 때: 오류 / 시간 초과(60초, ERD 규칙 3) */
-  failure_reason: "error" | "timeout" | null;
-}
-
-/** 소재 확인(M120)에서 고친 뒤 [소재함에 보관] */
-export type MaterialConfirmInput = Pick<MaterialCandidate, "title" | "summary" | "keywords" | "topic_ids">;
-
-/**
- * [직접 정리하기] 입력 — 목록 10번 (제안, C 합의 전 → 목업만)
- * 제목 필수, 주제 1개 이상 필수, 요약·키워드 선택, 근거 문장 없음 (origin = manual)
- */
-export interface MaterialManualInput {
-  title: string;
-  topic_ids: number[];
-  summary?: string;
-  keywords?: string[];
 }
 
 /** 소재함 카드 상태 (components/ui/MaterialCard와 같은 이름) */
@@ -192,13 +278,6 @@ export interface MaterialsOverview {
   kept: Material[];
   /** 원본만 보관한 기록 (ERD 규칙 5). 다시 분석 중이면 card_status가 붙음 */
   raw_only: { record: RecordItem; card_status: PendingCardStatus | null }[];
-}
-
-export interface MaterialDetail {
-  material: Material;
-  record: RecordItem;
-  messages: QnaMessage[];
-  essays: { id: Uuid; title: string }[];
 }
 
 /* ---------- 글쓰기 제안 ---------- */

@@ -1,7 +1,6 @@
 import type {
   DailyQuestion,
   Material,
-  MaterialCandidate,
   QnaMessage,
   RecordItem,
   SuggestionCard,
@@ -132,9 +131,11 @@ export interface MockDb {
   checkpoints: Record<Uuid, MockCheckpoint>;
   materials: Material[];
   /** 분석 중 기록: 시작 시각 (목업에서 몇 초 뒤 결과를 냄) */
-  analyses: Record<Uuid, { requestId: number; startedAt: number }>;
-  /** 확인 대기 후보 (analysis_status = done, 아직 보관 전) */
-  candidates: Record<Uuid, MaterialCandidate>;
+  /**
+   * 분석 중 기록. 목업은 조회 횟수로 끝낸다 (polls가 pollsNeeded에 닿으면 결과).
+   * startedAt: 60초 시간 초과 판단용 (서버 규칙)
+   */
+  analyses: Record<Uuid, { requestId: number; startedAt: number; polls: number; pollsNeeded: number }>;
   suggestion: SuggestionCard | null;
   /** 저장한 글 id (essays). 이벤트 essay_id 확인용 — 글 기능 목업은 아직 없음 */
   essayIds: Uuid[];
@@ -185,13 +186,12 @@ function createDb(): MockDb {
     materials: [
       seedMaterial({ id: "mat-sample-1", record_id: r1.id, title: "혼자 아팠던 날", summary: "아플 때 전화로 들은 엄마의 레시피", evidence: "엄마가 전화로 죽 끓이는 법을 알려 줬다.", keywords: ["감기", "엄마", "죽"], topic_ids: [topicId("가족"), topicId("몸·건강")], used_count: 1, created_at: daysAgo(1) }),
       seedMaterial({ id: "mat-sample-2", record_id: r2.id, title: "퇴근길 노을", summary: "노을을 보며 떠올린 엄마와의 기억", evidence: "작년에 엄마랑 같이 본 노을이 생각났다.", keywords: ["노을", "퇴근길"], topic_ids: [topicId("일상"), topicId("가족")], created_at: daysAgo(2) }),
+      // 확인 대기 후보 = 확정 전 소재 (B: materials.confirmed_at = null)
+      seedMaterial({ id: "mat-candidate-1", record_id: pendingReview.id, title: "이사 첫날", summary: "짐 사이에서 먹은 첫 끼", evidence: "바닥에 앉아 컵라면을 먹었다.", keywords: ["이사", "컵라면"], topic_ids: [topicId("일상")], confirmed_at: null, created_at: daysAgo(1) }),
       seedMaterial({ id: "mat-sample-3", record_id: r3.id, title: "이사 첫날 밤의 통화", summary: "독립한 첫날 밤 엄마의 걱정", evidence: "밥은 먹었냐고, 문단속 잘하라고 하셨어요.", keywords: ["이사", "통화"], topic_ids: [topicId("가족")], created_at: daysAgo(4) }),
     ],
     checkpoints: { [draftQna.id]: { seq: 3, pendingId: "msg-draft-3", at: draftQnaAt } },
     analyses: {},
-    candidates: {
-      [pendingReview.id]: { title: "이사 첫날", summary: "짐 사이에서 먹은 첫 끼", evidence: "바닥에 앉아 컵라면을 먹었다.", keywords: ["이사", "컵라면"], topic_ids: [topicId("일상")] },
-    },
     suggestion: {
       id: "sug-sample-1",
       topic_id: topicId("가족"),
@@ -235,7 +235,6 @@ export function clearUserData() {
   d.messages = [];
   d.materials = [];
   d.analyses = {};
-  d.candidates = {};
   d.suggestion = null;
   d.essayIds = [];
 }

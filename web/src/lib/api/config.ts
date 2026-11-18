@@ -15,14 +15,17 @@ export const USE_MOCK = MOCK_REQUESTED || (process.env.NODE_ENV !== "production"
 /** 일반 요청 제한 시간 */
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
-/** 소재 분석 최대 시간 (ERD 데이터 규칙 3: 최대 60초 → 실패). 판단은 서버가 한다. */
+/** 소재 분석 최대 시간 (ERD 데이터 규칙 3: 60초가 지나면 실패). 판단은 서버가 한다 (화면은 세지 않음) */
 export const ANALYSIS_TIMEOUT_MS = 60_000;
 
-/** 서버가 60초 판단을 늦게 알려 줄 때 화면이 더 기다리는 여유 */
-export const ANALYSIS_GRACE_MS = 10_000;
+/** 분석 중이면 다시 물어보는 간격 (B: 2~3초마다) */
+export const ANALYSIS_POLL_MS = 2_500;
 
-/** 분석 상태를 다시 물어보는 간격 */
-export const ANALYSIS_POLL_MS = 1_500;
+/**
+ * 화면을 연 뒤 이만큼 지나도 분석 중이면 기다림만 멈춘다 (마지막 상태를 돌려줌).
+ * 서버의 60초 실패 판단이 늦게 오는 경우를 넉넉히 기다리는 값
+ */
+export const ANALYSIS_WAIT_MS = 75_000;
 
 /**
  * AI 문답 이어 쓰기 기준 시간 (목록 17번 ⑥). 기준은 records.updated_at(마지막 활동).
