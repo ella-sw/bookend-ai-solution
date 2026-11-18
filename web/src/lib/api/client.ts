@@ -39,6 +39,8 @@ export type ApiErrorKind =
  *   (missing_field·unexpected_field는 서버가 "missing_field: record_type"처럼 칸 이름을 붙여 줌 → 앞부분만 code)
  * - 404 not_found (이벤트): record_not_found, essay_not_found, suggestion_not_found
  * - 502 server: ai_failed (오늘의 질문 만들기 실패)
+ * - 429 bad_request: daily_limit (오늘 AI 호출을 다 씀. B R32 — 다시 분석·AI 초안에서 씀, 화면 처리는 그 화면 개발 때.
+ *   문답은 오류 대신 QnaState.daily_limit_reached로 알려 줌)
  * 모르는 코드도 그대로 받는다 (서버가 코드를 늘려도 화면이 깨지지 않게).
  */
 export type ApiErrorCode =
@@ -62,6 +64,7 @@ export type ApiErrorCode =
   | "essay_not_found"
   | "suggestion_not_found"
   | "ai_failed"
+  | "daily_limit"
   | (string & {});
 
 export interface ApiError {
