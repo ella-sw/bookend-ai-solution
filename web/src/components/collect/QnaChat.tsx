@@ -2,13 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BottomActionBar, BottomActionBarSpacer, Loading, RetryNotice, ScreenHeader, Spinner, useToast } from "@/components/ui";
+import {
+  BottomActionBar,
+  BottomActionBarSpacer,
+  Button,
+  Loading,
+  RetryNotice,
+  ScreenHeader,
+  Spinner,
+  useToast,
+} from "@/components/ui";
 import {
   answerQna,
   getActiveQna,
   getQnaDraft,
   getTodayQuestions,
   QNA_RULES,
+  replaceQnaQuestion,
   requestNextQuestion,
   startQna,
   type ApiError,
@@ -57,6 +67,10 @@ async function loadInitial(resume: ResumeMode | null): Promise<Initial> {
  * - 화면 상태는 QnaState 값으로만 판단한다 (개수를 화면에서 세지 않음)
  * - 다음 질문이 없고(pending_question = null) 끝나지 않았으면 AI 실패 → [다시 시도] requestNextQuestion
  * - 409 not_pending_question·finished, 404 conversation_not_found → 지금 상태를 다시 불러와 맞춘다
+ * - [다른 질문 보기 N]: 후속 질문일 때만, N = replace_left. 실패(ai_failed)면 그대로 + '질문을 바꾸지 못했어요' (목록 12번)
+ *   0이면 회색·숫자 0, 팝업 없음 + 한 줄 안내 (9·10쪽)
+ * - [소재로 저장]: can_save가 false면 회색 + '질문에 하나만 더 답해 주세요' (목록 3번)
+ * - W212 (finished): 마무리 말, 입력·다른 질문 보기 막음, [소재로 저장] 강조
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + resume, W110과 같은 이유: cacheComponents의 Activity)
  */
@@ -83,6 +97,8 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const [sendingAnswer, setSendingAnswer] = useState<string | null>(null);
   /** 다음 질문 다시 받는 중 */
   const [retryingNext, setRetryingNext] = useState(false);
+  /** [다른 질문 보기] 요청 중 */
+  const [replacing, setReplacing] = useState(false);
   const busy = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -201,6 +217,23 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
     else await handleQnaError(res.error, "질문을 만들지 못했어요");
   };
 
+  /** [다른 질문 보기]: 성공한 뒤에만 바뀌고 횟수가 준다 (서버). AI 실패면 그대로 */
+  const replace = async () => {
+    const pending = qna?.pending_question;
+    if (busy.current || !qna || !pending) return;
+    busy.current = true;
+    setReplacing(true);
+    const res = await replaceQnaQuestion(qna.record_id, pending.id);
+    busy.current = false;
+    setReplacing(false);
+    if (!res.ok) {
+      await handleQnaError(res.error, "질문을 바꾸지 못했어요");
+      return;
+    }
+    setQna(res.data);
+    if (res.data.ai_failed) toast("질문을 바꾸지 못했어요");
+  };
+
   /* ---------- 화면 ---------- */
 
   if (phase === "loading") return <Loading fullScreen />;
@@ -227,8 +260,13 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const finished = qna?.finished ?? false;
   // 다음 질문이 없고 끝나지도 않음 = AI가 질문을 만들지 못함 (답변은 저장돼 있음)
   const nextMissing = qna !== null && !qna.pending_question && !qna.finished && !thinking;
-  const canType = !thinking && !finished && !nextMissing && (qna ? !!qna.pending_question : !!currentDaily);
+  const canType = !thinking && !replacing && !finished && !nextMissing && (qna ? !!qna.pending_question : !!currentDaily);
   const answerCount = qna?.answer_count ?? 0;
+  const pending = qna?.pending_question ?? null;
+  // 첫 질문은 바꿀 수 없음 → 후속 질문일 때만 (W212에서는 막음)
+  const showReplace = !!pending && pending.question_source === "followup" && !finished && !sending;
+  const replaceLeft = qna?.replace_left ?? 0;
+  const canSave = qna?.can_save ?? false;
   const showShortHint = !qna && input.trim().length > 0 && input.trim().length < SHORT_FIRST_ANSWER;
 
   return (
@@ -271,6 +309,32 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
           </div>
         ))}
 
+        {showReplace && (
+          <div className="flex flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={() => void replace()}
+              disabled={replaceLeft === 0 || replacing || thinking}
+              aria-busy={replacing || undefined}
+              className="inline-flex h-8 items-center gap-1.5 self-start rounded-full border border-line px-3 text-[13px] text-ink-soft active:bg-subtle disabled:cursor-not-allowed disabled:bg-subtle disabled:text-ink-mute"
+            >
+              {replacing && <Spinner className="size-3.5" />}
+              다른 질문 보기 <span className="font-semibold">{replaceLeft}</span>
+            </button>
+            {replaceLeft === 0 && (
+              <p className="text-xs text-ink-soft">
+                {/* answer_count ≥ 2 = 후속 답변 1개 이상 */}
+                {answerCount >= QNA_RULES.minAnswersToSave
+                  ? "짧게 답하거나, 지금까지 내용으로 저장해 보세요."
+                  : "한 줄만 더 답하면 저장할 수 있어요."}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* W212 질문 마무리 */}
+        {finished && <QuestionBubble text="오늘 이야기는 여기까지예요. 나눈 대화를 소재로 저장해 볼까요?" />}
+
         {sending && <AnswerBubble text={sendingAnswer} />}
         {thinking && (
           <p className="flex items-center gap-2 self-start text-sm text-ink-mute">
@@ -285,37 +349,52 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
         <div ref={bottomRef} />
       </div>
 
-      <BottomActionBarSpacer height="7rem" />
+      <BottomActionBarSpacer height="10rem" />
       <BottomActionBar>
-        {showShortHint && (
-          <p className="mb-2 text-xs text-ink-soft">어디서, 누구와, 어떤 기분이었는지 적으면 소재를 찾기 쉬워요</p>
+        {finished ? (
+          <>
+            <p className="mb-2 text-center text-sm text-ink-mute">질문이 모두 끝났어요</p>
+            <Button block size="lg" disabled={!canSave}>
+              소재로 저장
+            </Button>
+          </>
+        ) : (
+          <>
+            {qna && !canSave && <p className="mb-1.5 text-center text-xs text-ink-soft">질문에 하나만 더 답해 주세요</p>}
+            <Button block variant="secondary" className="mb-2" disabled={!canSave}>
+              소재로 저장
+            </Button>
+            {showShortHint && (
+              <p className="mb-2 text-xs text-ink-soft">어디서, 누구와, 어떤 기분이었는지 적으면 소재를 찾기 쉬워요</p>
+            )}
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send();
+              }}
+            >
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                maxLength={ANSWER_MAX}
+                rows={1}
+                disabled={!canType}
+                placeholder="답변을 입력하세요"
+                aria-label="답변"
+                className="max-h-32 min-h-11 flex-1 resize-none rounded-xl border border-line bg-surface px-3 py-2.5 text-[15px] leading-snug outline-none focus:border-ink disabled:bg-subtle disabled:opacity-60 field-sizing-content"
+              />
+              <button
+                type="submit"
+                aria-label="보내기"
+                disabled={!canType || !input.trim()}
+                className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-lg font-bold text-white active:brightness-90 disabled:opacity-40"
+              >
+                ↑
+              </button>
+            </form>
+          </>
         )}
-        <form
-          className="flex items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            maxLength={ANSWER_MAX}
-            rows={1}
-            disabled={!canType}
-            placeholder="답변을 입력하세요"
-            aria-label="답변"
-            className="max-h-32 min-h-11 flex-1 resize-none rounded-xl border border-line bg-surface px-3 py-2.5 text-[15px] leading-snug outline-none focus:border-ink disabled:bg-subtle disabled:opacity-60 field-sizing-content"
-          />
-          <button
-            type="submit"
-            aria-label="보내기"
-            disabled={!canType || !input.trim()}
-            className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary text-lg font-bold text-white active:brightness-90 disabled:opacity-40"
-          >
-            ↑
-          </button>
-        </form>
       </BottomActionBar>
     </>
   );
