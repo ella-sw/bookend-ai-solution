@@ -515,10 +515,14 @@ async def get_original(record_id: UUID, user: User) -> Original:
 
 
 @router.delete("/records/{record_id}", status_code=status.HTTP_204_NO_CONTENT,
-               responses={409: {"description": "material_confirmed"}})
+               responses={409: {"description": "material_confirmed / material_deleted"}})
 async def delete_record(record_id: UUID, user: User) -> Response:
     """M132 기록 삭제 (ERD rule 6): 보관 확정한 소재가 없는 저장된 원본만 실제로 지운다.
-    문답·확정 전 소재·관련 AI 요청도 지우고, 이벤트의 record_id는 비운다."""
+    문답·확정 전 소재·관련 AI 요청도 지우고, 이벤트의 record_id는 비운다.
+
+    팀 결정 (11/18): 소재 없음·실패로 남은 원본은 지울 수 있다. 소재를 삭제한 원본은
+    목록에 보이지 않고 개별 삭제도 안 된다 (409 `material_deleted`); [모든 기록 지우기]나
+    1달 자동 정리로만 지워진다."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         rec = await (await conn.execute(
@@ -529,11 +533,12 @@ async def delete_record(record_id: UUID, user: User) -> Response:
         if rec is None:
             raise _not_found("record_not_found")
         confirmed = await (await conn.execute(
-            "select 1 from materials where record_id = %s and confirmed_at is not null",
+            "select deleted_at from materials where record_id = %s and confirmed_at is not null",
             (record_id,),
         )).fetchone()
         if confirmed is not None:
-            raise _conflict("material_confirmed")
+            raise _conflict("material_deleted" if confirmed["deleted_at"] else
+                            "material_confirmed")
         await conn.execute(
             "delete from ai_requests where target_type = 'record' and target_id = %s",
             (record_id,))

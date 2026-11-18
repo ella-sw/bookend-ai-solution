@@ -115,13 +115,13 @@ async def reanalyze(record_id: UUID, user: User, ai: AI, background: BackgroundT
         if state.analysis_status == "analyzing":
             response.status_code = status.HTTP_200_OK
             return state
-        if not state.can_reanalyze:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="cannot_reanalyze")
         deleted = await (await conn.execute(
             "select 1 from materials where record_id = %s and deleted_at is not null",
             (record_id,))).fetchone()
         if deleted is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="material_deleted")
+        if not state.can_reanalyze:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="cannot_reanalyze")
         request_id = await start_analysis(conn, record_id)
         state = await _state(conn, record_id)
     if request_id is not None:
@@ -133,12 +133,19 @@ async def reanalyze(record_id: UUID, user: User, ai: AI, background: BackgroundT
 async def keep_original(record_id: UUID, user: User) -> AnalysisState:
     """[원본만 보관] (also before [새 대화 시작하기]/[새로 기록하기]): the record moves to
     '원본만 보관한 기록' at the bottom of the 소재함. Safe to call twice.
-    409 `material_confirmed` when its material is already in the 소재함."""
+    409 `material_confirmed` when its material is already in the 소재함,
+    409 `material_deleted` when its material was deleted (팀 결정 11/18: 그 원본은
+    '원본만 보관한 기록'에 다시 보이지 않는다)."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         state = await _state(conn, record_id)
         if state.material is not None and state.material.confirmed_at is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="material_confirmed")
+        deleted = await (await conn.execute(
+            "select 1 from materials where record_id = %s and deleted_at is not null",
+            (record_id,))).fetchone()
+        if deleted is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="material_deleted")
         await conn.execute(
             "update records set original_kept_at = coalesce(original_kept_at, now()) "
             "where id = %s",

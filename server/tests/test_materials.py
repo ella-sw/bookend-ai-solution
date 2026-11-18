@@ -274,12 +274,25 @@ def test_delete_material_is_logical(client, make_user, owner):
     assert b["materials"] == [] and b["pending"] == [] and b["kept_originals"] == []
     row = owner.execute("select deleted_at from materials where id = %s", (m["id"],)).fetchone()
     assert row["deleted_at"] is not None  # still there for essays ('삭제된 소재')
-    # 원본은 남고 (읽기 가능), 다시 확정하거나 지울 수는 없다
+    # 팀 결정 (11/18): 원본은 남지만 목록에 다시 보이지 않고, 개별 삭제·다시 확정·
+    # 다시 분석·원본만 보관 모두 안 된다 ([모든 기록 지우기]·1달 정리로만 지워짐)
     assert client.get(f"/records/{rec['id']}/original", headers=auth(a)).status_code == 200
-    assert confirm(client, a, rec["id"]).json()["detail"] == "material_deleted"
-    assert client.post(f"/records/{rec['id']}/analysis",
-                       headers=auth(a)).status_code == 409
-    assert client.delete(f"/records/{rec['id']}", headers=auth(a)).status_code == 409
+    for r in (confirm(client, a, rec["id"]),
+              client.post(f"/records/{rec['id']}/analysis", headers=auth(a)),
+              client.post(f"/records/{rec['id']}/keep-original", headers=auth(a)),
+              client.delete(f"/records/{rec['id']}", headers=auth(a))):
+        assert r.status_code == 409 and r.json()["detail"] == "material_deleted"
+    assert box(client, a)["kept_originals"] == []
+
+
+def test_nothing_found_original_can_be_deleted(client, make_user):
+    """소재 없음으로 남은 원본은 '원본만 보관한 기록'에 보이고 개별 삭제할 수 있다."""
+    a = make_user()
+    rec = save(client, a, body="그냥 그랬다")  # 소재 없음
+    client.post(f"/records/{rec['id']}/keep-original", headers=auth(a))
+    assert [c["record_id"] for c in box(client, a)["kept_originals"]] == [rec["id"]]
+    assert client.delete(f"/records/{rec['id']}", headers=auth(a)).status_code == 204
+    assert box(client, a)["kept_originals"] == []
 
 
 def test_delete_record_without_confirmed_material(client, make_user, owner):
