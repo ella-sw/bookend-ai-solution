@@ -4,6 +4,10 @@ import type { MockKey } from "./keys";
  * 목업 상황 고르기.
  * - ok: 정상 / fail: 서버 오류 / network: 연결 끊김 / timeout: 시간 초과
  * - empty: 빈 결과 (분석이면 '소재 없음', 목록이면 빈 목록) / slow: 느리지만 성공
+ * - ai_fail: AI 문답에서 질문 만들기만 실패 → ai_failed = true (qna.start·answer·next·replace).
+ *   답변은 저장되고, [다른 질문 보기]는 기존 질문·횟수 그대로. 다른 키는 정상과 같다
+ * - unauthorized: 세션 무효 (SDK가 세션을 지운 경우 흉내) → 목업 세션을 지우고 kind = unauthorized
+ * - not_consented: 동의 전 → 403 not_consented (GET /me는 404, users.ts가 kind = not_consented로 바꿈). 세션 유지
  * 이 브라우저에만 저장된다 (개발용). 저장이 막힌 환경이면 기본값(ok)으로 동작.
  */
 export const MOCK_SCENARIOS = {
@@ -13,6 +17,9 @@ export const MOCK_SCENARIOS = {
   timeout: "시간 초과",
   empty: "빈 결과 · 소재 없음",
   slow: "느림 (성공)",
+  ai_fail: "AI 실패 (문답: ai_failed = true)",
+  unauthorized: "세션 무효 (세션 지움 → O110)",
+  not_consented: "동의 전 (403 not_consented)",
 } as const;
 
 export type MockScenario = keyof typeof MOCK_SCENARIOS;
@@ -23,11 +30,18 @@ export interface MockSettings {
   overrides: Partial<Record<MockKey, MockScenario>>;
   /** 모든 응답에 더하는 기다림 (ms) */
   delayMs: number;
+  /** AI 문답 이어 쓰기 기준 시간 (ms). null이면 실제 값(config.ts QNA_RESUME_WINDOW_MS, 1시간) */
+  qnaResumeWindowMs: number | null;
 }
 
 const STORAGE_KEY = "rowflow.mock.v1";
 
-export const DEFAULT_MOCK_SETTINGS: MockSettings = { defaultScenario: "ok", overrides: {}, delayMs: 400 };
+export const DEFAULT_MOCK_SETTINGS: MockSettings = {
+  defaultScenario: "ok",
+  overrides: {},
+  delayMs: 400,
+  qnaResumeWindowMs: null,
+};
 
 let cache: MockSettings | null = null;
 const listeners = new Set<() => void>();

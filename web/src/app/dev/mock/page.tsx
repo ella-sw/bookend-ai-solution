@@ -6,10 +6,18 @@ import {
   clearAllData,
   getAnalysis,
   getHomeSummary,
+  getActiveQna,
+  getFreeDraft,
+  getMe,
   getMaterialsOverview,
-  getRecordDraft,
+  getQnaDraft,
+  getTodayQuestions,
+  hasSession,
+  newSaveToken,
+  QNA_RESUME_WINDOW_MS,
   saveFreeRecord,
-  startAnalysis,
+  saveQnaDraft,
+  startQna,
   startWithConsent,
   USE_MOCK,
   waitForAnalysis,
@@ -25,6 +33,7 @@ import {
   type MockScenario,
   type MockSettings,
 } from "@/lib/api/mock/scenario";
+import { clearMockSession, startMockConsentedUser } from "@/lib/api/mock/session";
 import { resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
@@ -49,16 +58,28 @@ export default function DevMockPage() {
     }
   };
 
-  /** 자유 기록 저장 → 분석 시작 → 끝날 때까지 기다리기 (M120 흐름) */
+  /** 자유 기록 저장(서버가 분석 시작) → 끝날 때까지 기다리기 (M120 흐름) */
   const analyzeFlow = () =>
     run("저장 → 분석 → 결과", async () => {
-      const saved = await saveFreeRecord({ title: "시험 기록", body: "오늘 아침 버스에서 오래된 친구를 우연히 만났다. 반가워서 한참 이야기했다." });
+      const saved = await saveFreeRecord({
+        title: "시험 기록",
+        body: "오늘 아침 버스에서 오래된 친구를 우연히 만났다. 반가워서 한참 이야기했다.",
+        save_token: newSaveToken(),
+      });
       if (!saved.ok) return saved;
-      const started = await startAnalysis(saved.data.id);
-      if (!started.ok) return started;
       return waitForAnalysis(saved.data.id, {
         onUpdate: (r) => setLog(`저장 → 분석 → 결과 …\n지금 상태: ${r.status}`),
       });
+    });
+
+  /** 첫 답변(active 만들기) → 임시 저장(active → draft) (W210·W211 흐름) */
+  const qnaDraftFlow = () =>
+    run("첫 답변 → 임시 저장", async () => {
+      const questions = await getTodayQuestions();
+      if (!questions.ok) return questions;
+      const started = await startQna({ daily_question_id: questions.data.questions[0].id, answer: "시험 답변이에요." });
+      if (!started.ok) return started;
+      return saveQnaDraft(started.data.record_id);
     });
 
   return (
@@ -85,6 +106,27 @@ export default function DevMockPage() {
               step={100}
               value={settings.delayMs}
               onChange={(e) => update({ ...settings, delayMs: Math.max(0, Number(e.target.value) || 0) })}
+              className="h-9 w-24 rounded-lg border border-line px-2 text-right"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>
+              AI 문답 이어 쓰기 기준 (초)
+              <br />
+              <span className="text-xs text-ink-mute">비우면 실제 값 {QNA_RESUME_WINDOW_MS / 60_000}분</span>
+            </span>
+            <input
+              type="number"
+              min={0}
+              step={10}
+              placeholder={String(QNA_RESUME_WINDOW_MS / 1000)}
+              value={settings.qnaResumeWindowMs === null ? "" : settings.qnaResumeWindowMs / 1000}
+              onChange={(e) =>
+                update({
+                  ...settings,
+                  qnaResumeWindowMs: e.target.value === "" ? null : Math.max(0, Number(e.target.value) || 0) * 1000,
+                })
+              }
               className="h-9 w-24 rounded-lg border border-line px-2 text-right"
             />
           </label>
@@ -120,14 +162,51 @@ export default function DevMockPage() {
             <Button variant="secondary" disabled={running} onClick={() => run("첫 실행 동의", startWithConsent)}>
               첫 실행 동의
             </Button>
+            <Button variant="secondary" disabled={running} onClick={() => run("내 정보", getMe)}>
+              내 정보 (GET /me)
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running}
+              onClick={() => run("세션 확인", async () => ({ ok: true, data: { has_session: await hasSession() } }))}
+            >
+              세션 확인
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running || !USE_MOCK}
+              onClick={() => {
+                const session = startMockConsentedUser(new Date().toISOString());
+                setLog(`동의한 사용자로 시작했어요
+${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at }, null, 2)}`);
+              }}
+            >
+              동의한 사용자로 시작
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running}
+              onClick={() => {
+                clearMockSession();
+                setLog("목업 세션을 지웠어요 (첫 화면이면 O110)");
+              }}
+            >
+              목업 세션 지우기
+            </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("홈", getHomeSummary)}>
               홈
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("소재함", getMaterialsOverview)}>
               소재함
             </Button>
-            <Button variant="secondary" disabled={running} onClick={() => run("자유 기록 임시 저장", () => getRecordDraft("free"))}>
-              임시 저장 확인
+            <Button variant="secondary" disabled={running} onClick={() => run("자유 기록 임시 저장", getFreeDraft)}>
+              자유 기록 임시 저장
+            </Button>
+            <Button variant="secondary" disabled={running} onClick={() => run("진행 중 문답", getActiveQna)}>
+              진행 중 문답
+            </Button>
+            <Button variant="secondary" disabled={running} onClick={() => run("문답 임시 저장", getQnaDraft)}>
+              문답 임시 저장
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("확인 대기 분석 결과", () => getAnalysis("rec-pending-review"))}>
               분석 결과
@@ -138,6 +217,9 @@ export default function DevMockPage() {
           </div>
           <Button block loading={running} onClick={analyzeFlow}>
             저장 → 분석 → 결과 (M120 흐름)
+          </Button>
+          <Button variant="secondary" block disabled={running} onClick={qnaDraftFlow}>
+            첫 답변 → 임시 저장 (W210 흐름)
           </Button>
           <Button
             variant="ghost"

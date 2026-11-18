@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import EntryGate from "@/components/layout/EntryGate";
 import { BottomSheet } from "@/components/ui/BottomSheet";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { USE_MOCK } from "@/lib/api/config";
@@ -9,12 +10,21 @@ import { routes } from "@/lib/routes";
 
 /**
  * H110 홈 (0단계: 최소 화면)
+ * - 들어오기 전에 EntryGate가 세션·동의를 확인한다 (목록 19번). 확인 전에는 홈을 그리지 않음
  * - [소재 모으기] → 방식 선택(H120, 아래 시트) → W110 / W210
  * - [새 글 쓰기] → 소재 고르기(N110)
  * - 글쓰기 제안 카드·최근 소재는 실제 데이터 연결 때(6단계) 추가. 지금은 빈 상태만.
  * - 이어 쓰기 확인(H121)은 W110 목업 때 추가
  */
 export default function HomePage() {
+  return (
+    <EntryGate>
+      <Home />
+    </EntryGate>
+  );
+}
+
+function Home() {
   const [collectOpen, setCollectOpen] = useState(false);
 
   return (

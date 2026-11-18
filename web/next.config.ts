@@ -13,6 +13,17 @@ if (
   );
 }
 
+// 실제 서버로 배포하면 익명 로그인(Supabase)이 필요하다 (src/lib/supabase.ts, 목록 19번)
+if (
+  process.env.NODE_ENV === "production" &&
+  process.env.NEXT_PUBLIC_USE_MOCK !== "1" &&
+  (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
+) {
+  throw new Error(
+    "NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY를 환경 변수에 넣어 주세요 (web/.env.example 참고).",
+  );
+}
+
 const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
