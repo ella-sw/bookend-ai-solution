@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     # R07: the whole draft (with one automatic retry for length) must finish within this,
     # below the 60-second limit after which expire_ai_requests() times a request out.
     ai_essay_deadline_seconds: float = 55
+    # R30: a topic gets a suggestion once this many different records have a confirmed
+    # material in it (provisional: 3, to be tuned after testing).
+    suggest_min_records: int = 3
+    ai_suggest_timeout_seconds: float = 55
     # R32: AI calls per user per day (KST). Provisional until the team decides (정할 것 1번).
     ai_daily_limit: int = 50
 

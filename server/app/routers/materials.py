@@ -26,16 +26,18 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from psycopg import AsyncConnection
 from pydantic import BaseModel, Field, StringConstraints
 
-from app.ai import MaterialAI, get_material_ai
+from app.ai import MaterialAI, SuggestAI, get_material_ai, get_suggest_ai
 from app.analysis import expire_if_stale, run_analysis, set_topics, start_analysis
 from app.auth import CurrentUser, current_user
 from app.db import require_consent, user_tx
 from app.routers.analysis import Topic
+from app.suggestions import recompute_topics
 
 router = APIRouter(tags=["materials"])
 
 User = Annotated[CurrentUser, Depends(current_user)]
 AI = Annotated[MaterialAI, Depends(get_material_ai)]
+SuggestAIDep = Annotated[SuggestAI, Depends(get_suggest_ai)]
 
 PREVIEW = 80  # characters of the original shown on a card
 Summary = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -167,6 +169,20 @@ def _conflict(detail: str) -> HTTPException:
     return HTTPException(status.HTTP_409_CONFLICT, detail=detail)
 
 
+async def _topics_of(conn: AsyncConnection, material_id: UUID) -> set[int]:
+    rows = await (await conn.execute(
+        "select topic_id from material_topics where material_id = %s", (material_id,),
+    )).fetchall()
+    return {r["topic_id"] for r in rows}
+
+
+def _recompute(background: BackgroundTasks, user_id: UUID, topics: set[int],
+               ai: SuggestAI) -> None:
+    """R30: after this request commits, recompute the suggestions of these topics."""
+    if topics:
+        background.add_task(recompute_topics, user_id, topics, ai)
+
+
 def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
@@ -272,8 +288,9 @@ async def _detail(conn: AsyncConnection, material_id: UUID) -> MaterialDetail:
 @router.post("/records/{record_id}/material", response_model=MaterialDetail,
              status_code=status.HTTP_201_CREATED,
              responses={200: {"description": "Already confirmed (retry): the material"}})
-async def confirm_material(record_id: UUID, data: ConfirmIn, user: User,
-                           response: Response) -> MaterialDetail:
+async def confirm_material(record_id: UUID, data: ConfirmIn, user: User, response: Response,
+                           background: BackgroundTasks, suggest_ai: SuggestAIDep
+                           ) -> MaterialDetail:
     """[소재함에 보관]: 보관 확정. AI 후보가 있으면 고친 값으로 확정하고, 없으면
     ([직접 정리하기]) 직접 쓴 값으로 새 소재(origin = manual)를 만든다.
 
@@ -331,7 +348,9 @@ async def confirm_material(record_id: UUID, data: ConfirmIn, user: User,
             "values (auth.uid(), 'material_confirmed', %s)",
             (record_id,),
         )
-        return await _detail(conn, mat["id"])
+        detail = await _detail(conn, mat["id"])
+    _recompute(background, user.id, set(topics), suggest_ai)  # R30
+    return detail
 
 
 # ---------------------------------------------------------------------------
@@ -479,11 +498,14 @@ async def material_detail(material_id: UUID, user: User) -> MaterialDetail:
 
 
 @router.patch("/materials/{material_id}", response_model=MaterialDetail)
-async def edit_material(material_id: UUID, data: EditIn, user: User) -> MaterialDetail:
-    """M131 소재 정보 고치기: 요약·키워드·주제만 (원본은 그대로)."""
+async def edit_material(material_id: UUID, data: EditIn, user: User,
+                        background: BackgroundTasks, suggest_ai: SuggestAIDep) -> MaterialDetail:
+    """M131 소재 정보 고치기: 요약·키워드·주제만 (원본은 그대로).
+    R30: suggestions of the old and the new topics are recomputed."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         await _live_material(conn, material_id, lock=True)
+        before = await _topics_of(conn, material_id)
         if data.summary is not None:
             await conn.execute("update materials set summary = %s where id = %s",
                                (data.summary, material_id))
@@ -495,8 +517,10 @@ async def edit_material(material_id: UUID, data: EditIn, user: User) -> Material
         if data.model_fields_set & {"summary", "keywords", "topics"}:
             await conn.execute("update materials set user_edited_at = now() where id = %s",
                                (material_id,))
-        # R30: suggestions for the old and new topics are recomputed (comes with R30)
-        return await _detail(conn, material_id)
+        topics = before | await _topics_of(conn, material_id)
+        detail = await _detail(conn, material_id)
+    _recompute(background, user.id, topics, suggest_ai)
+    return detail
 
 
 @router.post("/materials/{material_id}/reanalyze", response_model=MaterialDetail,
@@ -528,11 +552,14 @@ async def _latest_result(conn: AsyncConnection, record_id: UUID) -> dict | None:
 
 
 @router.post("/materials/{material_id}/reanalysis/apply", response_model=MaterialDetail)
-async def apply_reanalysis(material_id: UUID, user: User) -> MaterialDetail:
-    """[바꾸기]: 다시 분석한 결과로 소재 정보를 바꾼다. 409 `no_result` if there is none."""
+async def apply_reanalysis(material_id: UUID, user: User, background: BackgroundTasks,
+                           suggest_ai: SuggestAIDep) -> MaterialDetail:
+    """[바꾸기]: 다시 분석한 결과로 소재 정보를 바꾼다. 409 `no_result` if there is none.
+    R30: suggestions of the old and the new topics are recomputed."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         mat = await _live_material(conn, material_id, lock=True)
+        before = await _topics_of(conn, material_id)
         req = await _latest_result(conn, mat["record_id"])
         m = (req or {}).get("result") or {}
         if req is None or req["status"] != "ok" or not m.get("material"):
@@ -546,7 +573,10 @@ async def apply_reanalysis(material_id: UUID, user: User) -> MaterialDetail:
         await set_topics(conn, material_id, m["topics"])
         # ERD rule 12: the AI result is cleared once it is saved
         await conn.execute("update ai_requests set result = null where id = %s", (req["id"],))
-        return await _detail(conn, material_id)
+        topics = before | await _topics_of(conn, material_id)
+        detail = await _detail(conn, material_id)
+    _recompute(background, user.id, topics, suggest_ai)
+    return detail
 
 
 @router.post("/materials/{material_id}/reanalysis/dismiss", response_model=MaterialDetail)
@@ -564,15 +594,17 @@ async def dismiss_reanalysis(material_id: UUID, user: User) -> MaterialDetail:
 
 
 @router.delete("/materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_material(material_id: UUID, user: User) -> Response:
+async def delete_material(material_id: UUID, user: User, background: BackgroundTasks,
+                          suggest_ai: SuggestAIDep) -> Response:
     """M131 소재 삭제: 논리 삭제 (ERD rule 7). 원본 기록과 이미 쓴 글은 남고, 글에는
     '삭제된 소재'로 표시된다. 새 제안·새 글·다시 만들기에는 쓰지 않는다."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         await _live_material(conn, material_id, lock=True)
+        topics = await _topics_of(conn, material_id)
         await conn.execute("update materials set deleted_at = now() where id = %s",
                            (material_id,))
-        # R30: suggestions that used this material are recomputed (comes with R30)
+    _recompute(background, user.id, topics, suggest_ai)  # R30: its topics lose a material
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

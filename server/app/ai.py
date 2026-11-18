@@ -26,6 +26,11 @@ R07 EssayAI
   `min_chars`–`max_chars`. If `last_char_count` is set, the previous try was out of range.
 - 다시 만들기: rewrite `base_title` / `base_body` (the text the user was looking at), keeping
   what is already in it; materials are the essay's remaining (not deleted) materials.
+R30 SuggestAI
+- suggest: from one topic's confirmed materials, a writing suggestion (title, direction,
+  reason) and the materials to use (ids from the given list, at least `min_materials`).
+  If they don't fit together well, return `suggestion=None` (제안하지 않음).
+- The reason explains the grouping with the materials' actual content.
 """
 
 import re
@@ -118,6 +123,30 @@ class AIEssay:
     output_tokens: int | None = None
 
 
+@dataclass
+class SuggestMaterial:
+    id: str
+    title: str | None
+    summary: str | None
+    evidence: str | None
+    keywords: list[str]
+
+
+@dataclass
+class AISuggestion:
+    title: str  # 글 제목 제안
+    direction: str  # 소재들을 어떻게 엮을지 한두 문장
+    reason: str  # 왜 이 소재들이 묶였는지
+    material_ids: list[str]  # 사용할 소재 (주어진 목록에서, 쓸 순서대로)
+
+
+@dataclass
+class AISuggest:
+    suggestion: AISuggestion | None  # None = 제안하지 않음
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
 class AIError(Exception):
     """The AI call failed or returned something unusable."""
 
@@ -138,6 +167,12 @@ class MaterialAI(Protocol):
 class EssayAI(Protocol):
     async def write_essay(self, inp: DraftInput) -> AIEssay:
         """R07: one essay (초안 or 다시 만들기)."""
+
+
+class SuggestAI(Protocol):
+    async def suggest(self, topic: str, materials: list[SuggestMaterial],
+                      min_materials: int) -> AISuggest:
+        """R30: one writing suggestion for a topic, or None."""
 
 
 # ---------------------------------------------------------------------------
@@ -291,4 +326,31 @@ def get_essay_ai() -> EssayAI:
     provider = get_settings().ai_provider
     if provider == "stub":
         return StubEssayAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Stub suggestion: the newest materials of the topic, fixed sentences.
+# ---------------------------------------------------------------------------
+class StubSuggestAI:
+    async def suggest(self, topic: str, materials: list[SuggestMaterial],
+                      min_materials: int) -> AISuggest:
+        if len(materials) < min_materials:
+            return AISuggest(None, 0, 0)
+        chosen = materials[:min_materials]
+        names = ", ".join(m.title or m.summary or "소재" for m in chosen)
+        return AISuggest(AISuggestion(
+            title=f"{topic}에 관한 나의 이야기",
+            direction=f"{names}을(를) 차례로 엮어, {topic}에 대해 느낀 점을 써 봐요.",
+            reason=f"모두 '{topic}' 주제로 모은 소재예요.",
+            material_ids=[m.id for m in chosen],
+        ), 0, 0)
+
+
+@lru_cache
+def get_suggest_ai() -> SuggestAI:
+    """FastAPI dependency. Tests override it to simulate failures."""
+    provider = get_settings().ai_provider
+    if provider == "stub":
+        return StubSuggestAI()
     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")

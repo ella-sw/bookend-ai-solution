@@ -82,13 +82,12 @@ uv run ruff check .
 - [x] AI 질문 API: 오늘의 질문, 후속 질문, 다른 질문 보기 (R05) — AI는 stub, C가 `app/ai.py`에 실제 모델 연결
 - [x] 소재 분석 API: 저장하면 자동 분석, 결과 확인, [다시 분석], [원본만 보관] (R28, B·C 규칙 3) — AI는 stub, C가 `MaterialAI` 연결
 - [x] 소재함 API: 보관 확정·직접 정리하기, 소재함 목록, 상세, 고치기, 다시 분석 비교, 소재·기록 삭제 (R27)
-- [ ] 제안 다시 계산 (R30) — 소재 고치기·삭제 때 부를 자리 표시해 둠
 - [x] 모든 기록 지우기 (R31), 화면 이벤트 기록 POST /events (R33)
 - [x] 직접 쓰기·버전 저장·내 서재 (R07 직접 쓰기, R08, R10)
 - [x] 관련 소재 추천 GET /materials/related (R29, AI 없이 주제·키워드)
 - [x] 하루 AI 호출 한도 (R32) — 값은 AI_DAILY_LIMIT (임시 50, 팀 협의 후 확정)
 - [x] AI 초안·다시 만들기·저장 서버 흐름 (R07, R08) — AI는 stub, C가 `EssayAI` 연결
-- [ ] 글쓰기 제안 (R30, C)
+- [x] 글쓰기 제안 (R30) — 기준 3개(SUGGEST_MIN_RECORDS, 임시), AI는 stub, C가 `SuggestAI` 연결
 - [ ] 배포 (Render / Railway / Fly.io)
 
 ## 배포 (Render)
