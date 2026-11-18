@@ -4,6 +4,7 @@ Screen flow:
   M120 [소재함에 보관]   POST /records/{id}/material  (AI 후보를 고친 값과 함께) → 보관 확정
   M120 [직접 정리하기]   POST /records/{id}/material  (후보가 없으면 직접 쓴 값으로 새 소재)
   M110 소재함            GET  /materials
+  N110 관련 소재 추천    GET  /materials/related?selected=…  (R29, AI 없이 주제·키워드로)
   M130 소재 상세         GET  /materials/{id}
   M131 소재 정보 고치기   PATCH /materials/{id}  (요약·키워드·주제만)
   M131 다시 분석         POST /materials/{id}/reanalyze → GET /materials/{id} 의 `reanalysis`
@@ -21,7 +22,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from psycopg import AsyncConnection
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -78,6 +79,11 @@ class MaterialCard(BaseModel):
     topics: list[Topic]
     created_at: datetime
     essay_count: int  # '글 N편에 사용'
+
+
+class RelatedMaterial(MaterialCard):
+    shared_topics: list[str]  # 고른 소재와 같은 주제 ('같은 주제: 가족')
+    shared_keywords: list[str]  # 고른 소재와 같은 키워드
 
 
 class MaterialBox(BaseModel):
@@ -392,6 +398,71 @@ async def material_box(user: User) -> MaterialBox:
         materials=[MaterialCard(**m) for m in materials],
         kept_originals=[RecordCard(**r) for r in kept],
     )
+
+
+# ---------------------------------------------------------------------------
+# N110 관련 소재 추천 (R29)
+# ---------------------------------------------------------------------------
+KEYWORD_WEIGHT = 2  # a shared keyword is more specific than one of the 10 topics
+TOPIC_WEIGHT = 1
+
+
+@router.get("/materials/related", response_model=list[RelatedMaterial])
+async def related_materials(
+    user: User,
+    selected: Annotated[list[UUID], Query(max_length=20, description="고른 소재 id")] = [],  # noqa: B006
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+) -> list[RelatedMaterial]:
+    """N110 '함께 쓰면 좋은 소재': 고른 소재와 주제나 키워드가 같은 보관 확정 소재.
+
+    No AI call. Score = 2 × shared keywords + 1 × shared topics (keywords compared without
+    case and surrounding spaces); ties → newest first. Selected, deleted and unconfirmed
+    materials are left out. Nothing selected → []. 404 if a selected id is not the
+    caller's usable material.
+    """
+    if not selected:
+        return []
+    ids = list(dict.fromkeys(selected))
+    async with user_tx(user.id) as conn:
+        await require_consent(conn)
+        n = await (await conn.execute(
+            "select count(*) n from materials where id = any(%s) and user_id = auth.uid() "
+            "and confirmed_at is not null and deleted_at is null", (ids,))).fetchone()
+        if n["n"] != len(ids):
+            raise _not_found("material_not_found")
+        rows = await (await conn.execute(
+            f"""
+            with sel_topics as (
+              select distinct topic_id from material_topics where material_id = any(%(ids)s)
+            ), sel_keywords as (
+              select distinct lower(btrim(k)) as k
+                from materials, unnest(keywords) as k where id = any(%(ids)s)
+            ), cand as (
+              select m.*,
+                     array(select t.name from material_topics mt join topics t on t.id = mt.topic_id
+                            where mt.material_id = m.id
+                              and mt.topic_id in (select topic_id from sel_topics)
+                            order by t.sort_order) as shared_topics,
+                     array(select k from unnest(m.keywords) as k
+                            where lower(btrim(k)) in (select k from sel_keywords)) as shared_keywords
+                from materials m
+               where m.user_id = auth.uid() and m.confirmed_at is not null
+                 and m.deleted_at is null and m.id <> all(%(ids)s)
+            )
+            select c.id, c.record_id, c.title, c.summary, c.created_at, c.shared_topics,
+                   c.shared_keywords, {_TOPICS_SQL.replace("m.id", "c.id")} as topics,
+                   (select count(*) from essay_materials em where em.material_id = c.id)
+                     as essay_count
+              from cand c
+             where cardinality(c.shared_topics) > 0 or cardinality(c.shared_keywords) > 0
+             order by {KEYWORD_WEIGHT} * cardinality(c.shared_keywords)
+                      + {TOPIC_WEIGHT} * cardinality(c.shared_topics) desc,
+                      c.created_at desc
+             limit %(limit)s
+            """,
+            {"ids": ids, "limit": limit},
+        )).fetchall()
+    return [RelatedMaterial(**r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
