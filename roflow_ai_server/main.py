@@ -14,7 +14,7 @@ client = OpenAI(
     # base_url=os.getenv("ELICE_BASE_URL")
 )
 
-app = FastAPI(title="Rowflow AI API Server", version="1.0")g
+app = FastAPI(title="Rowflow AI API Server", version="1.0")
 
 # ==========================================
 # [피드백 ④ 반영] CORS 설정 추가
@@ -46,11 +46,14 @@ def extract_material(req: ExtractRequest):
     당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
     반드시 아래 JSON 형식으로만 응답하세요. 다른 말은 덧붙이지 마세요.
     {
+        "title": "추출된 소재의 핵심을 담은 짧은 제목",
         "summary": "핵심 내용을 1문장으로 요약",
         "keywords": ["핵심단어1", "핵심단어2", "핵심단어3"],
-        "topic": "가족" 
+        "topic_ids": ["선택된 주제1", "선택된 주제2"],
+        "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
     }
-    - 주의: topic은 반드시 '가족', '일상', '일' 중 가장 알맞은 1개만 선택해야 합니다.
+    - 주의: topic_ids는 반드시 다음 10개 중 1개 이상을 선택해야 합니다. 
+      [가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절]
     """
     response = client.chat.completions.create(
         model="gpt-4o-mini",
