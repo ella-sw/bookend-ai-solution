@@ -7,6 +7,7 @@ import { getMaterialBox, getSuggestion, type MaterialCard } from "@/lib/api";
 import { newEssayHref, readNewEssayParams, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { useDirectStart } from "./useDirectStart";
 
 /**
  * N120 글의 방향 확인 (UI 설계서 v7 19쪽 + 목록 20번: 방향 입력칸 없음)
@@ -39,6 +40,7 @@ function Direction({ initial }: { initial: NewEssayParams }) {
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const cleaned = useRef(false);
+  const direct = useDirectStart();
 
   /** 값을 바꾸고 주소에도 반영 (방문 기록은 늘리지 않음) */
   const update = (next: NewEssayParams) => {
@@ -143,7 +145,7 @@ function Direction({ initial }: { initial: NewEssayParams }) {
       <BottomActionBarSpacer />
       <BottomActionBar>
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="secondary" size="lg" onClick={() => router.push(newEssayHref(routes.newDirect, params))}>
+          <Button variant="secondary" size="lg" loading={direct.checking} onClick={() => void direct.start(params)}>
             직접 쓰기
           </Button>
           <Button size="lg" disabled={empty} onClick={() => router.push(newEssayHref(routes.newAiStyle, params))}>
@@ -151,6 +153,7 @@ function Direction({ initial }: { initial: NewEssayParams }) {
           </Button>
         </div>
       </BottomActionBar>
+      {direct.dialog}
     </>
   );
 }

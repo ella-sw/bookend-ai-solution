@@ -25,12 +25,16 @@ export function readNewEssayParams(search: { get(name: string): string | null; g
   };
 }
 
-/** 화면 주소 만들기. 넘기지 않은 값은 붙이지 않는다 (from = home은 생략) */
-export function newEssayHref(base: string, params: Partial<NewEssayParams>): string {
+/**
+ * 화면 주소 만들기. 넘기지 않은 값은 붙이지 않는다 (from = home은 생략).
+ * resume = "draft": N140 이어 쓰기 (H121 [예])
+ */
+export function newEssayHref(base: string, params: Partial<NewEssayParams> & { resume?: "draft" }): string {
   const q = new URLSearchParams();
   for (const id of params.m ?? []) q.append("m", id);
   if (params.s) q.set("s", params.s);
   if (params.from && params.from !== "home") q.set("from", params.from);
+  if (params.resume) q.set("resume", params.resume);
   const qs = q.toString();
   return qs ? `${base}?${qs}` : base;
 }

@@ -18,6 +18,7 @@ import { formatMonthDay } from "@/lib/format";
 import { newEssayHref, readNewEssayParams, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { useDirectStart } from "./useDirectStart";
 
 /** 함께 쓰면 좋은 소재를 묶어 부르는 간격 */
 const RELATED_DELAY_MS = 300;
@@ -48,6 +49,7 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
   const [selected, setSelected] = useState<string[]>(initial.m);
   const [topic, setTopic] = useState<number | null>(null);
   const [related, setRelated] = useState<RelatedMaterial[]>([]);
+  const direct = useDirectStart();
 
   useEffect(() => {
     let cancelled = false;
@@ -96,8 +98,8 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
     router.push(newEssayHref(routes.newDirection, { m: usable, s: initial.s, from: initial.from }));
   };
 
-  /** 소재 없이 직접 쓰기 (이어 쓰기 확인은 직접 쓰기 시작 함수에서) */
-  const writeWithout = () => router.push(newEssayHref(routes.newDirect, { from: "no_material" }));
+  /** 소재 없이 직접 쓰기 (임시 저장이 있으면 H121 이어 쓰기 확인) */
+  const writeWithout = () => void direct.start({ m: [], s: null, from: "no_material" });
 
   const header = <ScreenHeader title="소재 고르기" back />;
 
@@ -127,10 +129,11 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
         {header}
         <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
           <p className="text-[15px] font-semibold">아직 보관한 소재가 없어요</p>
-          <Button variant="secondary" onClick={writeWithout}>
+          <Button variant="secondary" loading={direct.checking} onClick={writeWithout}>
             소재 없이 직접 쓰기
           </Button>
         </section>
+        {direct.dialog}
       </>
     );
   }
@@ -202,11 +205,12 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
           <Button block size="lg" disabled={usable.length === 0} onClick={goNext}>
             다음{usable.length > 0 ? ` (${usable.length}개)` : ""}
           </Button>
-          <Button block variant="ghost" onClick={writeWithout}>
+          <Button block variant="ghost" loading={direct.checking} onClick={writeWithout}>
             소재 없이 직접 쓰기
           </Button>
         </div>
       </BottomActionBar>
+      {direct.dialog}
     </>
   );
 }
