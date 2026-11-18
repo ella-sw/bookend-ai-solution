@@ -37,6 +37,7 @@ import {
   MOCK_ESSAYS,
   newId,
   now,
+  persistDb,
   topicId,
   type MockEssay,
   type MockMessage,
@@ -1350,8 +1351,10 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
   try {
     const data = handlers[key]({ params, body: options.body, query: options.query, scenario });
     // 화면이 목업 DB 객체를 직접 고치지 못하게 복사해서 돌려줌
+    persistDb(); // 새로고침해도 남게 (조회만 했어도 분석 진행 횟수 등이 바뀔 수 있음)
     return { ok: true, data: structuredClone(data) as T };
   } catch (e) {
+    persistDb(); // 오류 전에 바뀐 것도 남김
     if (e instanceof MockHttpError) {
       // 서버 detail("missing_field: record_type" 등)을 실제 client.ts와 같은 방법으로 code로 바꾼다
       const code = e.code ? readErrorCode(JSON.stringify({ detail: e.code })) : undefined;

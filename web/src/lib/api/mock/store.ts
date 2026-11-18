@@ -270,14 +270,41 @@ function createDb(): MockDb {
 
 let db: MockDb | null = null;
 
+/**
+ * 목업 DB를 이 탭의 sessionStorage에 남긴다 → 새로고침·주소 직접 입력에도 데이터가 그대로 (탭을 닫으면 사라짐).
+ * 저장 모양이 바뀌면 키의 버전을 올린다 (예전 데이터는 버리고 처음 상태로)
+ */
+const DB_STORAGE_KEY = "rowflow.mock.db.v1";
+
+function loadStoredDb(): MockDb | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(DB_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as MockDb) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 지금 목업 DB를 저장 (요청을 처리한 뒤·개발용 버튼 뒤에 부른다). 저장이 막힌 환경이면 메모리에만 */
+export function persistDb() {
+  try {
+    if (typeof window === "undefined" || !db) return;
+    window.sessionStorage.setItem(DB_STORAGE_KEY, JSON.stringify(db));
+  } catch {
+    // 저장이 막힌 환경: 이 탭 메모리에만 둠
+  }
+}
+
 export function getDb(): MockDb {
-  if (!db) db = createDb();
+  if (!db) db = loadStoredDb() ?? createDb();
   return db;
 }
 
 /** 목업 DB를 처음 상태로 (/dev/mock) */
 export function resetDb() {
   db = createDb();
+  persistDb();
 }
 
 /**
@@ -361,6 +388,7 @@ export function fillMaterialBox() {
   for (const id of ["box-pending-analyzing", "box-raw-analyzing"]) {
     d.analyses[id] = { requestId: d.nextRequestId++, startedAt: Date.now(), polls: 0, pollsNeeded: 3 };
   }
+  persistDb();
 }
 
 /**
@@ -385,5 +413,6 @@ export function makeSampleSuggestion(): MockSuggestion | null {
     computed_at: new Date().toISOString(),
   };
   d.suggestions = [suggestion];
+  persistDb();
   return suggestion;
 }

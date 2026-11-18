@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { Button, ScreenHeader } from "@/components/ui";
+import { Button, ButtonLink, ScreenHeader } from "@/components/ui";
 import {
   clearAllData,
   getAnalysis,
@@ -40,6 +40,8 @@ import { fillMaterialBox, makeSampleSuggestion, resetDb } from "@/lib/api/mock/s
 export default function DevMockPage() {
   const settings = useSyncExternalStore(subscribeMockSettings, getMockSettings, () => DEFAULT_MOCK_SETTINGS);
   const [log, setLog] = useState<string>("");
+  /** [제안 하나 만들기]로 만든 제안 주소 (주소창에 옮겨 적지 않고 바로 열기) */
+  const [suggestionHref, setSuggestionHref] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
   const update = (next: MockSettings) => setMockSettings(next);
@@ -195,9 +197,10 @@ export default function DevMockPage() {
               disabled={running || !USE_MOCK}
               onClick={() => {
                 const made = makeSampleSuggestion();
+                setSuggestionHref(made ? `/new/suggestion/${made.id}` : null);
                 setLog(
                   made
-                    ? `제안을 만들었어요: ${made.title}. 주소 /new/suggestion/${made.id}`
+                    ? `제안을 만들었어요: ${made.title}. 아래 [만든 제안 열기]로 들어가 보세요`
                     : "보관한 소재가 3개 이상 있어야 해요. [소재함 데이터 채우기]를 먼저 눌러 주세요",
                 );
               }}
@@ -266,6 +269,11 @@ ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at 
           >
             목업 데이터 처음 상태로
           </Button>
+          {suggestionHref && (
+            <ButtonLink href={suggestionHref} variant="secondary" block>
+              만든 제안 열기 (N130)
+            </ButtonLink>
+          )}
           <pre className="max-h-96 overflow-auto rounded-xl bg-ink p-3 text-[11px] leading-relaxed whitespace-pre-wrap text-white">
             {log || "결과가 여기에 보여요"}
           </pre>
