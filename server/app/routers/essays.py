@@ -84,14 +84,29 @@ class Draft(BaseModel):
     updated_at: datetime
 
 
+LENGTHS = {"short": (300, 500), "long": (1000, 1500)}  # 단문 / 장문, 본문 글자 수
+
+
+def in_length_range(length: str | None, char_count: int) -> bool | None:
+    """AI 글이 고른 길이 범위 안인지. 직접 쓴 글(length 없음)은 None."""
+    if length not in LENGTHS:
+        return None
+    lo, hi = LENGTHS[length]
+    return lo <= char_count <= hi
+
+
 class Version(BaseModel):
     id: UUID
     version_no: int
     label: str  # 초안 / v1 / v2 …
-    kind: str
+    kind: str  # direct_first / direct_new / ai_first / ai_regen
     title: str | None
     body: str
     char_count: int  # 본문만, 공백 포함, 제목 제외
+    style: str | None  # 감성적 / 담백함 (AI일 때)
+    length: str | None  # short / long (AI일 때)
+    in_length_range: bool | None  # 범위 밖이면 false → 실제 글자 수를 보여 줌
+    regen_count: int  # 몇 번째로 다시 만든 글인지 (0 = 다시 만들기 아님)
     created_at: datetime
     updated_at: datetime
 
@@ -179,12 +194,14 @@ async def _essay(conn: AsyncConnection, essay_id: UUID) -> Essay:
     if e is None:
         raise _not_found("essay_not_found")
     versions = await (await conn.execute(
-        "select id, version_no, kind, title, body, char_count, created_at, updated_at "
-        "from essay_versions where essay_id = %s order by version_no",
+        "select id, version_no, kind, title, body, char_count, style, length, regen_count, "
+        "created_at, updated_at from essay_versions where essay_id = %s order by version_no",
         (essay_id,),
     )).fetchall()
     return Essay(**e, materials=await _materials(conn, essay_id),
-                 versions=[Version(**v, label=_label(v["version_no"])) for v in versions])
+                 versions=[Version(**v, label=_label(v["version_no"]),
+                                   in_length_range=in_length_range(v["length"], v["char_count"]))
+                           for v in versions])
 
 
 async def _lock_essay(conn: AsyncConnection, essay_id: UUID) -> dict:

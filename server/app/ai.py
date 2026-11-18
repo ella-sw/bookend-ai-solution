@@ -18,6 +18,14 @@ R28 MaterialAI
 - `evidence` must be a sentence copied from `source.user_text()` (the server checks).
 - `topics` are names from the given list (one or more).
 - Only the user's writing is analysed: for Q&A the answers, not the AI's questions.
+R07 EssayAI
+- write_essay: one essay (title + body) from the chosen materials, in order, with the
+  direction, style (감성적 / 담백함) and length. Never add experiences that are not in
+  the materials (or, for 다시 만들기, in `base_body`).
+- Body length = characters of the body only, spaces included, title excluded; aim for
+  `min_chars`–`max_chars`. If `last_char_count` is set, the previous try was out of range.
+- 다시 만들기: rewrite `base_title` / `base_body` (the text the user was looking at), keeping
+  what is already in it; materials are the essay's remaining (not deleted) materials.
 """
 
 import re
@@ -80,6 +88,36 @@ class AIExtract:
     output_tokens: int | None = None
 
 
+@dataclass
+class MaterialInput:
+    """One chosen material for an essay (ERD rule 11)."""
+    title: str | None
+    summary: str | None
+    evidence: str | None
+    original: str  # 원본 기록, up to 1,500 characters
+
+
+@dataclass
+class DraftInput:
+    materials: list[MaterialInput]  # in the chosen order
+    direction: str | None
+    style: str  # 감성적 / 담백함
+    length: str  # short / long
+    min_chars: int
+    max_chars: int
+    base_title: str | None = None  # 다시 만들기: the text being rewritten
+    base_body: str | None = None
+    last_char_count: int | None = None  # set on the automatic retry (out of range)
+
+
+@dataclass
+class AIEssay:
+    title: str
+    body: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
 class AIError(Exception):
     """The AI call failed or returned something unusable."""
 
@@ -95,6 +133,11 @@ class QuestionAI(Protocol):
 class MaterialAI(Protocol):
     async def extract_material(self, source: ExtractSource, topics: list[str]) -> AIExtract:
         """R28: 0 or 1 material from a saved record. `topics` = the 10 topic names."""
+
+
+class EssayAI(Protocol):
+    async def write_essay(self, inp: DraftInput) -> AIEssay:
+        """R07: one essay (초안 or 다시 만들기)."""
 
 
 # ---------------------------------------------------------------------------
@@ -218,4 +261,34 @@ def get_material_ai() -> MaterialAI:
     provider = get_settings().ai_provider
     if provider == "stub":
         return StubMaterialAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
+# ---------------------------------------------------------------------------
+# Stub essay: stitches the materials' sentences together to the requested length.
+# ---------------------------------------------------------------------------
+class StubEssayAI:
+    async def write_essay(self, inp: DraftInput) -> AIEssay:
+        parts = [p for m in inp.materials for p in (m.summary, m.evidence) if p]
+        if inp.base_body:
+            parts.insert(0, inp.base_body.strip())
+        if not parts:
+            raise AIError("nothing to write from")
+        target = (inp.min_chars + inp.max_chars) // 2
+        body = ""
+        i = 0
+        while len(body) < target:
+            body += ("" if not body else " ") + parts[i % len(parts)]
+            i += 1
+        body = body[:target]
+        title = inp.base_title or (inp.materials[0].title if inp.materials else None) or "오늘의 글"
+        return AIEssay(title=title, body=body, input_tokens=0, output_tokens=0)
+
+
+@lru_cache
+def get_essay_ai() -> EssayAI:
+    """FastAPI dependency. Tests override it to simulate failures."""
+    provider = get_settings().ai_provider
+    if provider == "stub":
+        return StubEssayAI()
     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")

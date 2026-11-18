@@ -87,7 +87,8 @@ uv run ruff check .
 - [x] 직접 쓰기·버전 저장·내 서재 (R07 직접 쓰기, R08, R10)
 - [x] 관련 소재 추천 GET /materials/related (R29, AI 없이 주제·키워드)
 - [x] 하루 AI 호출 한도 (R32) — 값은 AI_DAILY_LIMIT (임시 50, 팀 협의 후 확정)
-- [ ] AI 초안·다시 만들기 (R07, C), 글쓰기 제안 (R30, C)
+- [x] AI 초안·다시 만들기·저장 서버 흐름 (R07, R08) — AI는 stub, C가 `EssayAI` 연결
+- [ ] 글쓰기 제안 (R30, C)
 - [ ] 배포 (Render / Railway / Fly.io)
 
 ## 배포 (Render)

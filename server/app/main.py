@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.db import close_pool, open_pool, pool
-from app.routers import analysis, essays, events, materials, me, qna, records
+from app.routers import ai_essays, analysis, essays, events, materials, me, qna, records
 from app.usage import DailyLimitError
 
 
@@ -39,6 +39,7 @@ app.include_router(analysis.router)
 app.include_router(materials.router)
 app.include_router(events.router)
 app.include_router(essays.router)
+app.include_router(ai_essays.router)
 
 
 @app.get("/health", tags=["health"])
