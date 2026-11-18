@@ -26,6 +26,7 @@ from app.ai import MaterialAI, get_material_ai
 from app.analysis import expire_if_stale, run_analysis, start_analysis
 from app.auth import CurrentUser, current_user
 from app.db import require_consent, user_tx
+from app.usage import usage_today
 
 router = APIRouter(prefix="/records", tags=["analysis"])
 
@@ -55,6 +56,7 @@ class AnalysisState(BaseModel):
     analysis_status: str  # none / analyzing / done / empty / failed
     original_kept_at: datetime | None
     can_reanalyze: bool  # show [다시 분석]
+    daily_limit_reached: bool  # R32 '오늘 사용할 수 있는 횟수를 다 썼어요'
     material: Material | None
 
 
@@ -86,6 +88,7 @@ async def _state(conn: AsyncConnection, record_id: UUID) -> AnalysisState:
         analysis_status=rec["analysis_status"],
         original_kept_at=rec["original_kept_at"],
         can_reanalyze=rec["analysis_status"] in ("failed", "none"),
+        daily_limit_reached=(await usage_today(conn))["daily_limit_reached"],
         material=Material(**mat) if mat else None,
     )
 

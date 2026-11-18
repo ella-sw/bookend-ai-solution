@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # R28: the AI call gives up a little before the 60-second limit (expire_ai_requests),
     # so the user sees '분석하지 못했어요' within 60 seconds either way.
     ai_extract_timeout_seconds: float = 55
+    # R32: AI calls per user per day (KST). Provisional until the team decides (정할 것 1번).
+    ai_daily_limit: int = 50
 
     @property
     def cors_origin_list(self) -> list[str]:

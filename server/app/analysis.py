@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb
 from app.ai import AIError, AIExtract, ExtractedMaterial, ExtractSource, MaterialAI, Turn
 from app.config import get_settings
 from app.db import user_tx
+from app.usage import DailyLimitError, take_ai_call
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ async def start_analysis(conn: AsyncConnection, record_id: UUID) -> int | None:
     )).fetchone()
     if rec is None or rec["analysis_status"] == "analyzing":
         return None
+    await take_ai_call(conn)  # R32: raises DailyLimitError over today's limit
     req = await (await conn.execute(
         "insert into ai_requests (user_id, kind, target_type, target_id) "
         "values (auth.uid(), 'extract', 'record', %s) returning id",
@@ -65,13 +67,15 @@ async def start_after_save(user_id: UUID, record_id: UUID) -> int | None:
     """Start the analysis right after [소재로 저장] committed.
 
     Agreed with A: if this fails, the save still succeeds and the record shows
-    'failed' (분석하지 못했어요 + [다시 분석]).
+    'failed' (분석하지 못했어요 + [다시 분석]). Over the daily limit (R32) it is also
+    'failed'; GET /records/{id}/analysis then says daily_limit_reached = true.
     """
     try:
         async with user_tx(user_id) as conn:
             return await start_analysis(conn, record_id)
-    except Exception:
-        log.exception("could not start analysis for record %s", record_id)
+    except Exception as e:
+        if not isinstance(e, DailyLimitError):  # over the limit: shown as 'failed' + limit
+            log.exception("could not start analysis for record %s", record_id)
         try:
             async with user_tx(user_id) as conn:
                 await conn.execute(

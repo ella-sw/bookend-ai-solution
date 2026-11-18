@@ -38,6 +38,7 @@ from app.config import get_settings
 from app.db import owner_tx, require_consent, user_tx
 from app.routers.records import COLUMNS as RECORD_COLUMNS
 from app.routers.records import Record, start_analysis_after
+from app.usage import DailyLimitError, take_ai_call
 
 router = APIRouter(tags=["qna"])
 
@@ -76,6 +77,7 @@ class QnaState(BaseModel):
     finished: bool  # 7 answers → W212 마무리
     can_save: bool  # [소재로 저장] enabled (2+ answers)
     ai_failed: bool = False  # next question could not be made → [다시 시도] POST /next
+    daily_limit_reached: bool = False  # R32: no new question today ('오늘 … 다 썼어요')
 
 
 class DailyQuestion(BaseModel):
@@ -144,7 +146,8 @@ def _summary(msgs: list[dict]) -> dict:
     }
 
 
-async def _state(conn: AsyncConnection, record_id: UUID, ai_failed: bool = False) -> QnaState:
+async def _state(conn: AsyncConnection, record_id: UUID, ai_failed: bool = False,
+                 limit: bool = False) -> QnaState:
     rec = await (await conn.execute(
         "select id, status, updated_at from records where id = %s and user_id = auth.uid()",
         (record_id,),
@@ -163,12 +166,15 @@ async def _state(conn: AsyncConnection, record_id: UUID, ai_failed: bool = False
         finished=s["answer_count"] >= MAX_ANSWERS,
         can_save=s["answer_count"] >= MIN_ANSWERS_TO_SAVE,
         ai_failed=ai_failed,
+        daily_limit_reached=limit,
     )
 
 
-async def _state_for(user: CurrentUser, record_id: UUID, ai_failed: bool = False) -> QnaState:
+async def _state_for(user: CurrentUser, record_id: UUID, result: str = "ok") -> QnaState:
+    """`result` of _generate_question: ok / failed / limit."""
     async with user_tx(user.id) as conn:
-        return await _state(conn, record_id, ai_failed)
+        return await _state(conn, record_id, ai_failed=result == "failed",
+                            limit=result == "limit")
 
 
 async def _delete_record(conn: AsyncConnection, record_id: UUID) -> None:
@@ -180,19 +186,24 @@ async def _delete_record(conn: AsyncConnection, record_id: UUID) -> None:
 
 async def _generate_question(
     user: CurrentUser, record_id: UUID, ai: QuestionAI, replace_of: UUID | None = None,
-) -> bool:
+) -> str:
     """Ask the AI for the next (or a replacement) question and store it.
 
-    Returns False when the AI failed or the result arrived too late (B·C 규칙 3);
-    the conversation is then unchanged and the screen offers [다시 시도].
+    Returns "ok"; "failed" when the AI failed or the result arrived too late (B·C 규칙 3),
+    the conversation is then unchanged and the screen offers [다시 시도]; "limit" when
+    today's AI calls are used up (R32): nothing is recorded and the AI is not called.
     """
-    async with user_tx(user.id) as conn:
-        msgs = await _messages(conn, record_id)
-        req = await (await conn.execute(
-            "insert into ai_requests (user_id, kind, target_type, target_id) "
-            "values (auth.uid(), 'question', 'record', %s) returning id",
-            (record_id,),
-        )).fetchone()
+    try:
+        async with user_tx(user.id) as conn:
+            await take_ai_call(conn)
+            msgs = await _messages(conn, record_id)
+            req = await (await conn.execute(
+                "insert into ai_requests (user_id, kind, target_type, target_id) "
+                "values (auth.uid(), 'question', 'record', %s) returning id",
+                (record_id,),
+            )).fetchone()
+    except DailyLimitError:
+        return "limit"
     turns = [Turn(m["question"], m["answer"]) for m in msgs
              if not m["is_replaced"] and m["answer"] is not None]
     avoid = [m["question"] for m in msgs if m["is_replaced"] or m["id"] == replace_of]
@@ -210,7 +221,7 @@ async def _generate_question(
                 "where id = %s and status = 'running'",
                 ("timeout" if timed_out else "failed", type(e).__name__, req["id"]),
             )
-        return False
+        return "failed"
 
     async with user_tx(user.id) as conn:
         # B·C 규칙 3: apply only if this request is still running
@@ -233,7 +244,7 @@ async def _generate_question(
         if not still_valid:
             await conn.execute(
                 "update ai_requests set status = 'discarded' where id = %s", (req["id"],))
-            return False
+            return "failed"
         if replace_of:
             await conn.execute(
                 "update qna_messages set is_replaced = true where id = %s", (replace_of,))
@@ -242,7 +253,7 @@ async def _generate_question(
             "values (%s, %s, %s, 'followup')",
             (record_id, s["max_seq"] + 1, result.text.strip()),
         )
-    return True
+    return "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +360,8 @@ async def first_answer(data: FirstAnswerIn, user: User, ai: AI) -> QnaState:
             (rec["id"], dq["question"], dq["id"], data.answer),
         )
 
-    ok = await _generate_question(user, rec["id"], ai)
-    return await _state_for(user, rec["id"], ai_failed=not ok)
+    result = await _generate_question(user, rec["id"], ai)
+    return await _state_for(user, rec["id"], result)
 
 
 @router.post("/qna/{record_id}/answers", response_model=QnaState)
@@ -369,8 +380,8 @@ async def answer(record_id: UUID, data: AnswerIn, user: User, ai: AI) -> QnaStat
 
     if s["answer_count"] + 1 >= MAX_ANSWERS:
         return await _state_for(user, record_id)
-    ok = await _generate_question(user, record_id, ai)
-    return await _state_for(user, record_id, ai_failed=not ok)
+    result = await _generate_question(user, record_id, ai)
+    return await _state_for(user, record_id, result)
 
 
 @router.post("/qna/{record_id}/next", response_model=QnaState)
@@ -382,8 +393,8 @@ async def next_question(record_id: UUID, user: User, ai: AI) -> QnaState:
         s = _summary(await _messages(conn, record_id))
     if s["pending"] is not None or s["answer_count"] >= MAX_ANSWERS:
         return await _state_for(user, record_id)
-    ok = await _generate_question(user, record_id, ai)
-    return await _state_for(user, record_id, ai_failed=not ok)
+    result = await _generate_question(user, record_id, ai)
+    return await _state_for(user, record_id, result)
 
 
 @router.post("/qna/{record_id}/replace", response_model=QnaState)
@@ -401,8 +412,8 @@ async def replace_question(record_id: UUID, data: ReplaceIn, user: User, ai: AI)
         if s["replaced"] >= MAX_REPLACES:
             raise _conflict("replace_limit")
 
-    ok = await _generate_question(user, record_id, ai, replace_of=data.question_id)
-    return await _state_for(user, record_id, ai_failed=not ok)
+    result = await _generate_question(user, record_id, ai, replace_of=data.question_id)
+    return await _state_for(user, record_id, result)
 
 
 # ---------------------------------------------------------------------------

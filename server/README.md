@@ -86,7 +86,8 @@ uv run ruff check .
 - [x] 모든 기록 지우기 (R31), 화면 이벤트 기록 POST /events (R33)
 - [x] 직접 쓰기·버전 저장·내 서재 (R07 직접 쓰기, R08, R10)
 - [x] 관련 소재 추천 GET /materials/related (R29, AI 없이 주제·키워드)
-- [ ] AI 초안·다시 만들기 (R07, C), 하루 호출 한도 (R32)
+- [x] 하루 AI 호출 한도 (R32) — 값은 AI_DAILY_LIMIT (임시 50, 팀 협의 후 확정)
+- [ ] AI 초안·다시 만들기 (R07, C), 글쓰기 제안 (R30, C)
 - [ ] 배포 (Render / Railway / Fly.io)
 
 ## 배포 (Render)
@@ -111,6 +112,7 @@ Environment Variables (값은 대시보드에만 넣고 커밋하지 않는다):
 | `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
 | `CORS_ORIGINS` | `http://localhost:3000,https://bookend-ai-solution.vercel.app` |
 | `AI_PROVIDER` | `stub` (C의 AI가 들어오면 `openai` + `OPENAI_API_KEY`) |
+| `AI_DAILY_LIMIT` | 하루 AI 호출 한도 (없으면 50, 팀 협의 후 확정) |
 
 - 무료 요금제는 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
 - 배포 확인: `https://<서비스 주소>/health` → `{"status":"ok"}`, `/docs`
