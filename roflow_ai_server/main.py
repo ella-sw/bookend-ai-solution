@@ -9,11 +9,12 @@ from dotenv import load_dotenv
 # .env 파일에 적어둔 API 키를 불러옵니다.
 load_dotenv()
 client = OpenAI(
-    api_key=os.getenv("ELICE_API_KEY"),
-    base_url=os.getenv("ELICE_BASE_URL")
+    api_key=os.getenv("OPENAI_API_KEY")
+    # api_key=os.getenv("ELICE_API_KEY"),
+    # base_url=os.getenv("ELICE_BASE_URL")
 )
 
-app = FastAPI(title="Rowflow AI API Server", version="1.0")
+app = FastAPI(title="Rowflow AI API Server", version="1.0")g
 
 # ==========================================
 # [피드백 ④ 반영] CORS 설정 추가
