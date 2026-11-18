@@ -25,6 +25,19 @@ export const routes = {
   settings: "/settings", // S110
 } as const;
 
+/**
+ * 이어 쓰기 표시 (H120·H121, 목록 17번 ⑩·⑪)
+ * - draft: H121 [예]로 임시 저장을 이어서 (자유 기록·AI 질문)
+ * - active: AI 질문의 진행 중 대화를 H121 없이 이어서
+ * 표시가 없으면 새로 시작 (기존 임시 저장은 건드리지 않음)
+ */
+export type ResumeMode = "draft" | "active";
+
+export const collectRoutes = {
+  free: (resume?: Extract<ResumeMode, "draft">) => (resume ? `${routes.collectFree}?resume=${resume}` : routes.collectFree),
+  ai: (resume?: ResumeMode) => (resume ? `${routes.collectAi}?resume=${resume}` : routes.collectAi),
+};
+
 /** 하단 탭 4개 (홈 · 소재함 · 내 서재 · 설정) */
 export const tabs = [
   { key: "home", label: "홈", href: routes.home },
