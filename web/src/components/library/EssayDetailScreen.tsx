@@ -17,8 +17,10 @@ import {
   useToast,
 } from "@/components/ui";
 import {
+  deleteEssay,
   ESSAY_RULES,
   getEssay,
+  logEvent,
   newSaveToken,
   overwriteVersion,
   saveNewVersion,
@@ -43,6 +45,10 @@ const titleOrNull = (title: string) => (title.trim() ? title.trim() : null);
  *   save_token은 편집 시작 때 하나. 실패하면 고친 내용 유지 + '저장하지 못했어요' [다시 시도]
  *   편집 중 뒤로가기: 바뀐 게 있으면 '고친 내용은 저장되지 않아요'
  * - [다시 만들기] → W310 다시 만들기 모드 (보고 있는 버전 바탕)
+ * - ⋯ → L121: [공유하기] → L123 / [글 삭제] (확인 뒤 → L110, 사용한 소재는 소재함에 남음)
+ * - L123 (목록 2·13·15번): 보고 있는 버전의 제목 + 빈 줄 + 본문.
+ *   [복사] 성공 → '복사했어요' + body_shared(copy). [다른 앱으로 공유]는 navigator.share가 있을 때만,
+ *   오류 없이 끝나면 body_shared(share_sheet). 취소(AbortError)·실패는 기록하지 않음
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + essayId)
  */
@@ -75,6 +81,15 @@ function EssayDetail({ essayId }: { essayId: string }) {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const leaveChosen = useRef(false);
   const busy = useRef(false);
+
+  // L121 더보기 · L123 공유 · 글 삭제
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreChoice = useRef<"share" | "delete" | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [canShare, setCanShare] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteChosen = useRef(false);
+  const [deleting, setDeleting] = useState(false);
 
   /** 글이 없으면(삭제됨) 내 서재로. 처리했으면 true */
   const handleCommonError = useCallback(
@@ -163,6 +178,64 @@ function EssayDetail({ essayId }: { essayId: string }) {
     if (choice) void save(choice);
   };
 
+  /* ---------- 더보기 (L121) · 공유 (L123) · 글 삭제 ---------- */
+
+  /** 시트가 다 닫힌 뒤 고른 것을 연다 (다른 시트·팝업이 뒤로가기 기록과 엉키지 않게) */
+  const onMoreClosed = () => {
+    setMoreOpen(false);
+    const choice = moreChoice.current;
+    moreChoice.current = null;
+    if (choice === "share") {
+      setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
+      setShareOpen(true);
+    }
+    if (choice === "delete") setDeleteOpen(true);
+  };
+
+  /** 공유할 내용: 보고 있는 버전의 제목 + 빈 줄 + 본문 */
+  const shareText = () => (version ? [version.title?.trim(), version.body].filter(Boolean).join("\n\n") : "");
+
+  /** [복사]: 누른 그 자리에서 바로 (브라우저는 사용자가 누른 직후에만 허용) */
+  const copy = async (close: () => void) => {
+    if (!essay) return;
+    try {
+      await navigator.clipboard.writeText(shareText());
+      toast("복사했어요");
+      void logEvent("body_shared", { essay_id: essay.id, share_method: "copy" });
+    } catch {
+      toast("복사하지 못했어요");
+    }
+    close();
+  };
+
+  /** [다른 앱으로 공유]: 휴대폰 기본 공유창. 오류 없이 끝났을 때만 기록 (취소·실패는 기록 안 함) */
+  const share = async (close: () => void) => {
+    if (!essay || !version) return;
+    try {
+      await navigator.share({ title: version.title?.trim() || undefined, text: shareText() });
+      void logEvent("body_shared", { essay_id: essay.id, share_method: "share_sheet" });
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === "AbortError")) toast("공유하지 못했어요");
+    }
+    close();
+  };
+
+  const removeEssay = async () => {
+    if (busy.current || !essay) return;
+    busy.current = true;
+    setDeleting(true);
+    const res = await deleteEssay(essay.id);
+    busy.current = false;
+    setDeleting(false);
+    if (res.ok) {
+      toast("글을 지웠어요");
+      router.replace(routes.library);
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    toast("지우지 못했어요");
+  };
+
   const requestExit = () => {
     if (dirty) setLeaveOpen(true);
     else leave();
@@ -206,7 +279,21 @@ function EssayDetail({ essayId }: { essayId: string }) {
           }
         />
       ) : (
-        <ScreenHeader title="글 상세" back />
+        <ScreenHeader
+          title="글 상세"
+          back
+          right={
+            <button
+              type="button"
+              aria-label="더보기"
+              disabled={deleting}
+              onClick={() => setMoreOpen(true)}
+              className="flex size-10 items-center justify-center rounded-full text-xl text-ink active:bg-subtle"
+            >
+              ⋯
+            </button>
+          }
+        />
       )}
 
       <div className="flex flex-1 flex-col gap-5 px-5 pt-4 pb-4">
@@ -342,6 +429,74 @@ function EssayDetail({ essayId }: { essayId: string }) {
           </div>
         )}
       </BottomSheet>
+
+      {/* L121 더보기 */}
+      <BottomSheet open={moreOpen} onClose={onMoreClosed}>
+        {({ close }) => (
+          <div className="flex flex-col">
+            <button
+              type="button"
+              onClick={() => {
+                moreChoice.current = "share";
+                close();
+              }}
+              className="flex h-13 items-center rounded-xl px-1 text-left text-[15px] active:bg-subtle"
+            >
+              공유하기
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                moreChoice.current = "delete";
+                close();
+              }}
+              className="flex h-13 items-center rounded-xl px-1 text-left text-[15px] text-danger active:bg-subtle"
+            >
+              글 삭제
+            </button>
+            <p className="mt-1 px-1 text-xs text-ink-mute">사용한 소재는 소재함에 남아요</p>
+          </div>
+        )}
+      </BottomSheet>
+
+      {/* L123 공유 */}
+      <BottomSheet open={shareOpen} onClose={() => setShareOpen(false)} title="공유하기">
+        {({ close }) => (
+          <div className="flex flex-col gap-2">
+            <Button block size="lg" variant="secondary" onClick={() => void copy(close)}>
+              복사
+            </Button>
+            {canShare && (
+              <button
+                type="button"
+                onClick={() => void share(close)}
+                className="flex flex-col items-start rounded-xl border border-line px-4 py-3 text-left active:bg-subtle"
+              >
+                <span className="text-[15px] font-semibold">다른 앱으로 공유</span>
+                <span className="text-xs text-ink-mute">카카오톡 · 인스타그램 · 브런치 등</span>
+              </button>
+            )}
+          </div>
+        )}
+      </BottomSheet>
+
+      {/* 글 삭제 확인 */}
+      <ConfirmDialog
+        open={deleteOpen}
+        onClose={() => {
+          setDeleteOpen(false);
+          if (deleteChosen.current) {
+            deleteChosen.current = false;
+            void removeEssay();
+          }
+        }}
+        title="글을 지울까요?"
+        description="모든 버전이 지워지고 되돌릴 수 없어요. 사용한 소재는 소재함에 남아요."
+        actions={[
+          { label: "취소", onClick: () => (deleteChosen.current = false) },
+          { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
+        ]}
+      />
 
       {/* 편집 중 나가기 확인 */}
       <ConfirmDialog
