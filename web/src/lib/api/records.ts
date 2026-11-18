@@ -1,5 +1,5 @@
 import { request, type ApiResult } from "./client";
-import type { RecordItem } from "./types";
+import type { AnalysisState, RecordItem } from "./types";
 
 /**
  * 저장 요청 하나를 가리키는 값 (records.save_token, 목록 17번 ⑨).
@@ -58,16 +58,23 @@ export function saveFreeRecord(input: { record_id?: string; title?: string | nul
   return request<RecordItem>({ method: "POST", path: "/records/free", body: input, mock: { key: "records.free.save" } });
 }
 
-/** M120 [원본만 보관] · [새 대화 시작하기]/[새로 기록하기]를 누를 때도 기록 (ERD 규칙 5) */
+/**
+ * M120 [원본만 보관] · [새 대화 시작하기]/[새로 기록하기]를 누를 때도 기록 (ERD 규칙 5).
+ * 소재함 맨 아래 '원본만 보관한 기록'으로. 두 번 불러도 안전.
+ * 오류: 409 material_confirmed(이미 보관한 소재 있음) / material_deleted(소재를 삭제한 원본, 목록 22번)
+ */
 export function keepOriginal(recordId: string) {
-  return request<RecordItem>({
+  return request<AnalysisState>({
     method: "POST",
     path: `/records/${recordId}/keep-original`,
     mock: { key: "records.keep", params: { recordId } },
   });
 }
 
-/** M132 기록 삭제: 보관 확정 소재가 없는 원본만 */
+/**
+ * M132 기록 삭제 (204): 보관 확정 소재가 없는 저장된 원본만. 소재 없음·실패로 남은 원본은 지울 수 있다 (목록 21번).
+ * 오류: 404 record_not_found, 409 material_confirmed / material_deleted (목록 22번: 삭제한 소재의 원본은 개별 삭제 불가)
+ */
 export function deleteRecord(recordId: string) {
   return request<null>({
     method: "DELETE",

@@ -1,28 +1,15 @@
-import { ANALYSIS_GRACE_MS, ANALYSIS_POLL_MS, ANALYSIS_TIMEOUT_MS } from "./config";
+import { ANALYSIS_POLL_MS, ANALYSIS_WAIT_MS } from "./config";
 import { request, type ApiResult } from "./client";
-import type {
-  AnalysisResult,
-  Material,
-  MaterialConfirmInput,
-  MaterialDetail,
-  MaterialManualInput,
-  MaterialsOverview,
-} from "./types";
+import type { AnalysisState, ConfirmMaterialInput, MaterialDetail, MaterialsOverview, Original } from "./types";
 
-/* ---------- 소재 분석 (M120) ---------- */
+/* ---------- 소재 분석 (M120) — B routers/analysis.py ---------- */
 
-/** 분석 시작. 화면을 닫아도 서버에서 계속된다 (목록 16번: FastAPI 백그라운드 작업 안) */
-export function startAnalysis(recordId: string) {
-  return request<{ request_id: number }>({
-    method: "POST",
-    path: `/records/${recordId}/analysis`,
-    mock: { key: "analysis.start", params: { recordId } },
-  });
-}
-
-/** 지금 분석 상태·결과 (분석 중 / 후보 / 소재 없음 / 실패) */
+/**
+ * 분석 상태와 소재 후보. 분석은 [소재로 저장] 때 서버가 시작하고, 화면을 닫아도 계속된다.
+ * 60초가 지난 분석은 서버가 이 요청 때 failed로 바꾼다. 404 record_not_found
+ */
 export function getAnalysis(recordId: string) {
-  return request<AnalysisResult>({
+  return request<AnalysisState>({
     method: "GET",
     path: `/records/${recordId}/analysis`,
     mock: { key: "analysis.get", params: { recordId } },
@@ -30,33 +17,34 @@ export function getAnalysis(recordId: string) {
 }
 
 /**
- * 분석이 끝날 때까지 기다린다 (M120 소재 확인).
- * - 60초 시간 초과는 서버가 판단해 status = failed, failure_reason = timeout으로 알려 준다 (ERD 규칙 3).
- *   화면은 실패를 지어내지 않는다 → 새로고침해도 서버 상태와 같다.
- * - 기다림 기준은 서버가 준 started_at(분석 시작 시각)이다. 화면을 나갔다 와도 60초를 다시 세지 않는다.
- * - 서버가 60초 + 여유(10초)가 지나도 분석 중이라고 하면 기다림만 멈추고 마지막 상태(analyzing)를 돌려준다.
- *   이때 화면은 '아직 분석 중'으로 보여 주면 된다 (소재함 확인 대기 카드에서 이어서 볼 수 있음).
- * - 늦게 도착한 결과를 버리는 판단도 서버 몫 — 목록 9번 (전달됨, B·C 답 대기)
- * - signal로 화면을 나갈 때 기다림을 멈출 수 있다.
+ * [다시 분석]: 실패(failed)일 때만 (소재 없음은 같은 원문이라 같은 결과). 202, 이미 분석 중이면 200.
+ * 오류: 409 cannot_reanalyze(done·empty) / material_deleted, 429 daily_limit (오늘 AI 호출을 다 씀)
+ */
+export function reanalyze(recordId: string) {
+  return request<AnalysisState>({
+    method: "POST",
+    path: `/records/${recordId}/analysis`,
+    mock: { key: "analysis.start", params: { recordId } },
+  });
+}
+
+/**
+ * 분석이 끝날 때까지 기다린다 (M120).
+ * - 분석 중(analyzing)이면 2.5초마다 다시 묻는다. 시간 초과(60초 → failed) 판단은 서버가 한다
+ * - 부르고 나서 75초가 지나도 분석 중이면 기다림만 멈추고 마지막 상태(analyzing)를 돌려준다
+ *   → 화면은 '아직 찾고 있어요' (소재함 확인 대기 카드에서 이어서 볼 수 있음)
+ * - signal로 화면을 나갈 때 멈춘다. 요청이 실패하면 그 결과를 바로 돌려준다
  */
 export async function waitForAnalysis(
   recordId: string,
-  { signal, onUpdate }: { signal?: AbortSignal; onUpdate?: (r: AnalysisResult) => void } = {},
-): Promise<ApiResult<AnalysisResult>> {
-  // started_at이 없으면(서버가 아직 안 줌) 지금부터 센다
-  let deadline = Date.now() + ANALYSIS_TIMEOUT_MS + ANALYSIS_GRACE_MS;
-
+  { signal, onUpdate }: { signal?: AbortSignal; onUpdate?: (state: AnalysisState) => void } = {},
+): Promise<ApiResult<AnalysisState>> {
+  const deadline = Date.now() + ANALYSIS_WAIT_MS;
   while (true) {
     const result = await getAnalysis(recordId);
     if (signal?.aborted || !result.ok) return result;
     onUpdate?.(result.data);
-    if (result.data.status !== "analyzing") return result;
-
-    if (result.data.started_at) {
-      deadline = new Date(result.data.started_at).getTime() + ANALYSIS_TIMEOUT_MS + ANALYSIS_GRACE_MS;
-    }
-    if (Date.now() >= deadline) return result;
-
+    if (result.data.analysis_status !== "analyzing" || Date.now() >= deadline) return result;
     const stopped = await wait(ANALYSIS_POLL_MS, signal);
     if (stopped) return result;
   }
@@ -78,9 +66,15 @@ function wait(ms: number, signal?: AbortSignal): Promise<boolean> {
   });
 }
 
-/** [소재함에 보관]: 고친 후보를 보관 확정 */
-export function confirmMaterial(recordId: string, input: MaterialConfirmInput) {
-  return request<Material>({
+/* ---------- 보관 (M120) — B routers/materials.py ---------- */
+
+/**
+ * [소재함에 보관] · [직접 정리하기] (같은 함수): AI 후보가 있으면 고친 값으로 보관 확정,
+ * 없으면 직접 쓴 값으로 새 소재(origin = manual). 201, 이미 보관됐으면 200 + 그 소재 (다시 보내도 안전).
+ * 오류: 404 record_not_found, 409 material_deleted, 422 unknown_topic·입력 오류(코드 없음)
+ */
+export function confirmMaterial(recordId: string, input: ConfirmMaterialInput) {
+  return request<MaterialDetail>({
     method: "POST",
     path: `/records/${recordId}/material`,
     body: input,
@@ -88,26 +82,23 @@ export function confirmMaterial(recordId: string, input: MaterialConfirmInput) {
   });
 }
 
-/**
- * [직접 정리하기] — 목록 10번 (제안, C 합의 전 → 목업만)
- * 제목 필수, 주제 1개 이상, 요약·키워드 선택, 근거 문장 없음 (origin = manual)
- */
-export function saveManualMaterial(recordId: string, input: MaterialManualInput) {
-  return request<Material>({
-    method: "POST",
-    path: `/records/${recordId}/material/manual`,
-    body: input,
-    mock: { key: "material.manual", params: { recordId } },
+/** 원문 (읽기 전용): 자유 기록 본문 또는 문답 (답한 질문만). 404 record_not_found */
+export function getOriginal(recordId: string) {
+  return request<Original>({
+    method: "GET",
+    path: `/records/${recordId}/original`,
+    mock: { key: "records.original", params: { recordId } },
   });
 }
 
 /* ---------- 소재함 (M110) · 소재 상세 (M130) ---------- */
 
-/** 확인 대기 · 임시 저장 · 보관한 소재 · 원본만 보관을 한 번에 */
+/** 확인 대기 · 임시 저장 · 보관한 소재 · 원본만 보관을 한 번에 (A 임시안 — M110 개발 때 B MaterialBox로) */
 export function getMaterialsOverview() {
   return request<MaterialsOverview>({ method: "GET", path: "/materials", mock: { key: "materials.list" } });
 }
 
+/** 보관한 소재 상세. 404 material_not_found (삭제했거나 보관 전) */
 export function getMaterial(materialId: string) {
   return request<MaterialDetail>({
     method: "GET",

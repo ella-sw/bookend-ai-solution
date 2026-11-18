@@ -68,7 +68,7 @@ export default function DevMockPage() {
       });
       if (!saved.ok) return saved;
       return waitForAnalysis(saved.data.id, {
-        onUpdate: (r) => setLog(`저장 → 분석 → 결과 …\n지금 상태: ${r.status}`),
+        onUpdate: (r) => setLog(`저장 → 분석 → 결과 …\n지금 상태: ${r.analysis_status}`),
       });
     });
 

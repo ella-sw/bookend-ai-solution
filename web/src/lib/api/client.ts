@@ -35,6 +35,8 @@ export type ApiErrorKind =
  * - 409 conflict: finished(답변 7개), not_pending_question(답을 기다리는 질문이 아님), first_question_not_replaceable,
  *   replace_limit(6회), not_draft, not_active, need_more_answers(답변 2개 전 저장)
  * - 403 not_consented: 동의 전 (B db.require_consent)
+ * - 소재 (B analysis.py·materials.py): 409 cannot_reanalyze(done·empty) / material_deleted(삭제한 소재의 원본) /
+ *   material_confirmed(이미 보관), 404 material_not_found, 422 unknown_topic
  * - 422 bad_request: invalid_daily_question, empty_body, missing_field, unexpected_field, record_type_mismatch
  *   (missing_field·unexpected_field는 서버가 "missing_field: record_type"처럼 칸 이름을 붙여 줌 → 앞부분만 code)
  * - 404 not_found (이벤트): record_not_found, essay_not_found, suggestion_not_found
@@ -65,6 +67,11 @@ export type ApiErrorCode =
   | "suggestion_not_found"
   | "ai_failed"
   | "daily_limit"
+  | "cannot_reanalyze"
+  | "material_deleted"
+  | "material_confirmed"
+  | "material_not_found"
+  | "unknown_topic"
   | (string & {});
 
 export interface ApiError {
