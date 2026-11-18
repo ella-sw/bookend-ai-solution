@@ -221,32 +221,64 @@ export interface HomeSummary {
 }
 
 /* ---------- 이벤트 ---------- */
+/*
+ * 화면이 보내는 이벤트 5개 (B server/app/routers/events.py, 목록 23~27번 합의).
+ * record_saved·material_confirmed·essay_saved는 서버가 직접 기록한다 → 화면이 보내면 422.
+ * 기록·글 본문은 넣지 않는다. 이벤트별로 정해진 칸 말고는 타입으로 막는다 (서버도 422).
+ */
 
-export type EventName =
-  | "record_started"
-  | "record_saved"
-  | "material_confirmed"
-  | "writing_started"
-  | "suggestion_shown"
-  | "suggestion_selected"
-  | "essay_saved"
-  | "body_shared";
-
-interface EventPropsBase {
-  record_id?: Uuid;
-  essay_id?: Uuid;
-  suggestion_id?: Uuid;
-  write_mode?: "direct" | "ai";
-  material_count?: number;
-  entry_path?: "home" | "materials" | "material_detail" | "suggestion" | "no_material";
-}
-
+export type WriteMode = "direct" | "ai";
+export type EntryPath = "home" | "materials" | "material_detail" | "suggestion" | "no_material";
+export type SuggestionPlacement = "home" | "suggestion_detail";
+/** 목록 13·15번 (합의): ERD v7의 share_target 대신 share_method */
 export type ShareMethod = "copy" | "share_sheet";
 
-/**
- * 이벤트별 값. body_shared는 share_method가 꼭 있어야 하고, 다른 이벤트에는 넣을 수 없다 (타입 검사로 막음).
- * 목록 13·15번 (합의): ERD v7의 share_target 대신 share_method
- */
-export type EventProps<N extends EventName = EventName> = N extends "body_shared"
-  ? EventPropsBase & { share_method: ShareMethod }
-  : EventPropsBase & { share_method?: never };
+/** 이벤트가 가질 수 있는 칸 전부 (B: FIELDS) */
+export type EventField =
+  | "record_id"
+  | "essay_id"
+  | "suggestion_id"
+  | "write_mode"
+  | "material_count"
+  | "entry_path"
+  | "share_method"
+  | "record_type"
+  | "placement";
+
+/** P에 없는 칸은 넣을 수 없게 (never). 유니언이면 경우마다 따로 적용 */
+type OnlyFields<P> = P extends unknown ? P & { [K in Exclude<EventField, keyof P>]?: never } : never;
+
+/** writing_started: entry_path = suggestion이면 suggestion_id 필수, 다른 경로면 넣을 수 없음 */
+type WritingStartedProps =
+  | {
+      write_mode: WriteMode;
+      entry_path: "suggestion";
+      /** 고른 소재 수. 0~100 정수 (서버 검사, 화면 선택 개수 규칙과 별개) */
+      material_count: number;
+      suggestion_id: Uuid;
+    }
+  | {
+      write_mode: WriteMode;
+      entry_path: Exclude<EntryPath, "suggestion">;
+      /** 고른 소재 수. 0~100 정수 (서버 검사, 화면 선택 개수 규칙과 별개) */
+      material_count: number;
+      suggestion_id?: never;
+    };
+
+/** 이벤트 이름 → 칸 (B: RULES) */
+export interface EventPropsMap {
+  /** 자유 기록·AI 질문 화면에 들어올 때마다 (이어 쓰기·새로고침·재진입 포함, 재렌더링 제외). 이어 쓰기면 record_id */
+  record_started: { record_type: RecordType; record_id?: Uuid };
+  /** 직접: 편집기 진입 / AI: [초안 만들기] 첫 클릭 (생성 실패 뒤 재시도 제외) */
+  writing_started: WritingStartedProps;
+  /** 제안 카드가 실제로 화면에 보였을 때, 화면당 제안별 1번 (스크롤 재노출 제외) */
+  suggestion_shown: { suggestion_id: Uuid; placement: SuggestionPlacement };
+  /** [이 주제로 글쓰기] 클릭 (빠른 연속 클릭은 1번) */
+  suggestion_selected: { suggestion_id: Uuid };
+  /** [복사] 성공 / 공유창이 오류 없이 끝남. 취소(AbortError)·실패는 보내지 않음 */
+  body_shared: { essay_id: Uuid; share_method: ShareMethod };
+}
+
+export type EventName = keyof EventPropsMap;
+
+export type EventProps<N extends EventName = EventName> = OnlyFields<EventPropsMap[N]>;

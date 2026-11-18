@@ -1,4 +1,4 @@
-import { apiError, type ApiErrorCode, type ApiErrorKind, type ApiResult, type RequestOptions } from "../client";
+import { apiError, readErrorCode, type ApiErrorCode, type ApiErrorKind, type ApiResult, type RequestOptions } from "../client";
 import type {
   AnalysisResult,
   DailyQuestions,
@@ -332,6 +332,88 @@ function kstToday() {
 
 function toMe(session: MockSession): Me {
   return { id: session.user_id, ai_consent_at: session.consented_at, last_seen_at: now(), data_cleared_at: null };
+}
+
+/* ---------- 이벤트 검사 (B: routers/events.py) ---------- */
+
+const EVENT_FIELDS = [
+  "record_id",
+  "essay_id",
+  "suggestion_id",
+  "write_mode",
+  "material_count",
+  "entry_path",
+  "share_method",
+  "record_type",
+  "placement",
+] as const;
+type EventFieldName = (typeof EVENT_FIELDS)[number];
+
+/** 이름 → [필수 칸, 선택 칸] (B: RULES) */
+const EVENT_RULES: Record<string, [EventFieldName[], EventFieldName[]]> = {
+  record_started: [["record_type"], ["record_id"]],
+  writing_started: [["write_mode", "entry_path", "material_count"], ["suggestion_id"]],
+  suggestion_shown: [["suggestion_id", "placement"], []],
+  suggestion_selected: [["suggestion_id"], []],
+  body_shared: [["essay_id", "share_method"], []],
+};
+
+/** 값 모양 (B: EventIn의 Literal·Field 검사). 맞지 않으면 422 (FastAPI 입력 검사 오류, 코드 없음) */
+const EVENT_VALUES: Partial<Record<EventFieldName, readonly string[]>> = {
+  record_type: ["free", "qna"],
+  placement: ["home", "suggestion_detail"],
+  write_mode: ["direct", "ai"],
+  entry_path: ["home", "materials", "material_detail", "suggestion", "no_material"],
+  share_method: ["copy", "share_sheet"],
+};
+
+function checkEvent(body: unknown) {
+  const input = (body ?? {}) as Record<string, unknown>;
+  // ① 입력 모양 (FastAPI가 먼저 거절): 모르는 이름·모르는 칸·값 모양
+  if (typeof input.name !== "string" || !(input.name in EVENT_RULES)) fail("bad_request");
+  for (const k of Object.keys(input)) {
+    if (k !== "name" && !(EVENT_FIELDS as readonly string[]).includes(k)) fail("bad_request"); // extra = forbid
+  }
+  for (const f of EVENT_FIELDS) {
+    const v = input[f];
+    if (v === undefined || v === null) continue;
+    const allowed = EVENT_VALUES[f];
+    if (allowed && !allowed.includes(v as string)) fail("bad_request");
+    if (f === "material_count" && !(Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 100)) fail("bad_request");
+    if (f.endsWith("_id") && typeof v !== "string") fail("bad_request");
+  }
+
+  // ② 이벤트별 필수·허용 칸
+  const name = input.name as string;
+  const [required, optional] = EVENT_RULES[name];
+  const given = EVENT_FIELDS.filter((f) => input[f] !== undefined && input[f] !== null);
+  const missing = required.filter((f) => !given.includes(f)).sort();
+  if (missing.length) fail("bad_request", `missing_field: ${missing.join(", ")}`);
+  const extra = given.filter((f) => !required.includes(f) && !optional.includes(f)).sort();
+  if (extra.length) fail("bad_request", `unexpected_field: ${extra.join(", ")}`);
+  if (name === "writing_started") {
+    const fromSuggestion = input.entry_path === "suggestion";
+    if (fromSuggestion && !given.includes("suggestion_id")) fail("bad_request", "missing_field: suggestion_id");
+    if (!fromSuggestion && given.includes("suggestion_id")) fail("bad_request", "unexpected_field: suggestion_id");
+  }
+
+  // ③ 내 기록·글·제안인지 (목업 DB에 있는지)
+  const db = getDb();
+  const exists: Record<"record_id" | "essay_id" | "suggestion_id", (id: string) => boolean> = {
+    record_id: (id) => db.records.some((r) => r.id === id),
+    essay_id: (id) => db.essayIds.includes(id),
+    suggestion_id: (id) => db.suggestion?.id === id,
+  };
+  for (const f of ["record_id", "essay_id", "suggestion_id"] as const) {
+    const v = input[f];
+    if (typeof v === "string" && !exists[f](v)) fail("not_found", `${f.replace(/_id$/, "")}_not_found`);
+  }
+
+  // ④ 이어 쓰기 record_id의 방식이 record_type과 같은지
+  if (typeof input.record_id === "string") {
+    const record = db.records.find((r) => r.id === input.record_id)!;
+    if (record.type !== input.record_type) fail("bad_request", "record_type_mismatch");
+  }
 }
 
 /* ---------- 처리 함수 (키별) ---------- */
@@ -693,7 +775,11 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return null;
   },
 
-  "events.log": () => null,
+  // R33 이벤트 (B: routers/events.py와 같은 순서로 검사). 성공은 204 빈 응답
+  "events.log": ({ body }) => {
+    checkEvent(body);
+    return null;
+  },
 };
 
 /**
@@ -770,7 +856,11 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
     // 화면이 목업 DB 객체를 직접 고치지 못하게 복사해서 돌려줌
     return { ok: true, data: structuredClone(data) as T };
   } catch (e) {
-    if (e instanceof MockHttpError) return { ok: false, error: apiError(e.kind, e.status, e.code) };
+    if (e instanceof MockHttpError) {
+      // 서버 detail("missing_field: record_type" 등)을 실제 client.ts와 같은 방법으로 code로 바꾼다
+      const code = e.code ? readErrorCode(JSON.stringify({ detail: e.code })) : undefined;
+      return { ok: false, error: apiError(e.kind, e.status, code) };
+    }
     throw e;
   }
 }

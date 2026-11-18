@@ -136,6 +136,8 @@ export interface MockDb {
   /** 확인 대기 후보 (analysis_status = done, 아직 보관 전) */
   candidates: Record<Uuid, MaterialCandidate>;
   suggestion: SuggestionCard | null;
+  /** 저장한 글 id (essays). 이벤트 essay_id 확인용 — 글 기능 목업은 아직 없음 */
+  essayIds: Uuid[];
   nextRequestId: number;
   /** 중복 저장 막기: save_token → 저장된 기록 id (목록 17번 ⑨) */
   saveTokens: Record<string, Uuid>;
@@ -203,6 +205,7 @@ function createDb(): MockDb {
         { id: "mat-sample-2", title: "퇴근길 노을" },
       ],
     },
+    essayIds: ["essay-sample-1"],
     nextRequestId: 1,
     saveTokens: {},
   };
@@ -234,6 +237,7 @@ export function clearUserData() {
   d.analyses = {};
   d.candidates = {};
   d.suggestion = null;
+  d.essayIds = [];
 }
 
 export { now };

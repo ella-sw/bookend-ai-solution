@@ -35,7 +35,9 @@ export type ApiErrorKind =
  * - 409 conflict: finished(답변 7개), not_pending_question(답을 기다리는 질문이 아님), first_question_not_replaceable,
  *   replace_limit(6회), not_draft, not_active, need_more_answers(답변 2개 전 저장)
  * - 403 not_consented: 동의 전 (B db.require_consent)
- * - 422 bad_request: invalid_daily_question, empty_body
+ * - 422 bad_request: invalid_daily_question, empty_body, missing_field, unexpected_field, record_type_mismatch
+ *   (missing_field·unexpected_field는 서버가 "missing_field: record_type"처럼 칸 이름을 붙여 줌 → 앞부분만 code)
+ * - 404 not_found (이벤트): record_not_found, essay_not_found, suggestion_not_found
  * - 502 server: ai_failed (오늘의 질문 만들기 실패)
  * 모르는 코드도 그대로 받는다 (서버가 코드를 늘려도 화면이 깨지지 않게).
  */
@@ -54,6 +56,11 @@ export type ApiErrorCode =
   | "need_more_answers"
   | "invalid_daily_question"
   | "empty_body"
+  | "missing_field"
+  | "unexpected_field"
+  | "record_type_mismatch"
+  | "essay_not_found"
+  | "suggestion_not_found"
   | "ai_failed"
   | (string & {});
 
@@ -103,6 +110,7 @@ const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]*$/;
  *   { "code": "draft_not_found" }
  *   { "detail": { "code": "draft_not_found" } }   (FastAPI HTTPException(detail={...}))
  *   { "detail": "draft_not_found" }               (FastAPI HTTPException(detail="..."))
+ *   { "detail": "missing_field: record_type" }    → "missing_field" (콜론 뒤 칸 이름은 버림)
  *   { "error": { "code": "draft_not_found" } }
  * 코드 모양(snake_case)이 아닌 문장·검사 오류 목록은 무시한다.
  */
@@ -116,7 +124,11 @@ export function readErrorCode(text: string): ApiErrorCode | undefined {
   }
   if (!body || typeof body !== "object") return undefined;
   const b = body as { code?: unknown; detail?: unknown; error?: unknown };
-  const pick = (v: unknown) => (typeof v === "string" && ERROR_CODE_PATTERN.test(v) ? v : undefined);
+  const pick = (v: unknown) => {
+    if (typeof v !== "string") return undefined;
+    const head = v.split(":")[0].trim();
+    return ERROR_CODE_PATTERN.test(head) && (head === v || v.startsWith(`${head}: `)) ? head : undefined;
+  };
   const codeOf = (v: unknown) => (v && typeof v === "object" ? pick((v as { code?: unknown }).code) : undefined);
   return pick(b.code) ?? codeOf(b.detail) ?? pick(b.detail) ?? codeOf(b.error);
 }
