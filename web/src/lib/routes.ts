@@ -66,6 +66,8 @@ export function shouldShowTabBar(pathname: string) {
   // 소재함(M110)은 탭 화면, 그 아래 화면(M120 소재 확인, M130 소재 상세·보관한 원본)은 탭 없이
   // 아래 고정 버튼([이 소재로 글쓰기] 등)을 쓴다 (UI 설계서 v7 12·14~16쪽)
   if (pathname.startsWith(`${routes.materials}/`)) return false;
+  // 내 서재(L110)도 같은 규칙: 글 상세(L120)는 탭 없이 (UI 설계서 v7 25·26쪽)
+  if (pathname.startsWith(`${routes.library}/`)) return false;
   return !HIDE_TAB_PREFIXES.some((prefix) => matches(pathname, prefix));
 }
 

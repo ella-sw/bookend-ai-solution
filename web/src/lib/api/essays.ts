@@ -2,6 +2,7 @@ import { request, type ApiResult } from "./client";
 import type {
   CreateAiDraftInput,
   Essay,
+  EssayCard,
   EssayDraft,
   EssayLength,
   RegenerateBase,
@@ -89,4 +90,46 @@ export function saveRegeneration(essayId: string, requestId: number, input: { sa
     body: input,
     mock: { key: "essays.regeneration.save", params: { essayId, requestId: String(requestId) } },
   });
+}
+
+/* ---------- 내 서재 (L110) · 글 상세 (L120) · 저장 방식 (L122) · 글 삭제 (L121) — B essays.py ---------- */
+
+/** L110: 직접 쓰기 임시 저장(1개)은 맨 위, 나머지는 최근에 고친 순서 */
+export function getEssays() {
+  return request<EssayCard[]>({ method: "GET", path: "/essays", mock: { key: "essays.list" } });
+}
+
+/**
+ * L122 [저장 후 덮어쓰기]: 보고 있던 버전의 내용을 바꾼다 (이전 내용은 남지 않음). 같은 내용으로 다시 보내도 안전.
+ * 오류: 422 empty_body, 404 version_not_found·essay_not_found
+ */
+export function overwriteVersion(essayId: string, versionId: string, input: { title: string | null; body: string }) {
+  return request<Essay>({
+    method: "PUT",
+    path: `/essays/${essayId}/versions/${versionId}`,
+    body: input,
+    mock: { key: "essays.version.overwrite", params: { essayId, versionId } },
+  });
+}
+
+/**
+ * L122 [새 버전으로 저장]: 다음 번호로 보관 (초안 다음은 v1). 201, 같은 save_token이면 200 (버전은 하나).
+ * save_token은 고치기 시작할 때 하나, [다시 시도]에도 같은 값.
+ * 오류: 422 empty_body, 404 version_not_found·essay_not_found, 409 save_token_used
+ */
+export function saveNewVersion(
+  essayId: string,
+  input: { title: string | null; body: string; based_on_version_id: string; save_token: string },
+) {
+  return request<Essay>({
+    method: "POST",
+    path: `/essays/${essayId}/versions`,
+    body: input,
+    mock: { key: "essays.version.new", params: { essayId } },
+  });
+}
+
+/** L121 글 삭제 (204): 글·모든 버전·소재 연결을 지운다. 소재는 소재함에 남는다. 임시 저장도 지울 수 있다 */
+export function deleteEssay(essayId: string) {
+  return request<null>({ method: "DELETE", path: `/essays/${essayId}`, mock: { key: "essays.delete", params: { essayId } } });
 }

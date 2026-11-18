@@ -5,7 +5,7 @@ import { Button, ButtonLink, ScreenHeader } from "@/components/ui";
 import {
   clearAllData,
   getAnalysis,
-  getHomeSummary,
+  getSuggestions,
   getActiveQna,
   getFreeDraft,
   getMe,
@@ -34,7 +34,7 @@ import {
   type MockSettings,
 } from "@/lib/api/mock/scenario";
 import { clearMockSession, startMockConsentedUser } from "@/lib/api/mock/session";
-import { fillMaterialBox, makeSampleSuggestion, resetDb } from "@/lib/api/mock/store";
+import { fillEssays, fillMaterialBox, makeSampleSuggestion, resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
 export default function DevMockPage() {
@@ -211,6 +211,16 @@ export default function DevMockPage() {
               variant="secondary"
               disabled={running || !USE_MOCK}
               onClick={() => {
+                fillEssays();
+                setLog("글 데이터를 채웠어요 (임시 저장 1 · AI 글 초안~v2 · 직접 쓴 글 v1 · 삭제된 소재를 쓴 글 1)");
+              }}
+            >
+              글 데이터 채우기
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running || !USE_MOCK}
+              onClick={() => {
                 const session = startMockConsentedUser(new Date().toISOString());
                 setLog(`동의한 사용자로 시작했어요
 ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at }, null, 2)}`);
@@ -228,8 +238,8 @@ ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at 
             >
               목업 세션 지우기
             </Button>
-            <Button variant="secondary" disabled={running} onClick={() => run("홈", getHomeSummary)}>
-              홈
+            <Button variant="secondary" disabled={running} onClick={() => run("제안 목록", getSuggestions)}>
+              제안 목록
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("소재함", getMaterialBox)}>
               소재함

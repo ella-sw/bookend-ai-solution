@@ -40,3 +40,18 @@ export function removeRegenResult(essayId: string, requestId: number) {
     // 무시
   }
 }
+
+/** 모든 기록 지우기(S120) 뒤: 이 탭에 남은 다시 만들기 결과를 모두 지운다 */
+export function clearAllRegenResults() {
+  memory.clear();
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const key = window.sessionStorage.key(i);
+      if (key?.startsWith("regen:")) keys.push(key);
+    }
+    keys.forEach((key) => window.sessionStorage.removeItem(key));
+  } catch {
+    // 무시
+  }
+}
