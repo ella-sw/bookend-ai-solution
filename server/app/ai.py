@@ -34,13 +34,15 @@ R30 SuggestAI
 """
 
 import re
+import os
+import json
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
 from typing import Protocol
 
+from openai import OpenAI
 from app.config import get_settings
-
 
 @dataclass
 class Turn:
@@ -174,6 +176,275 @@ class SuggestAI(Protocol):
                       min_materials: int) -> AISuggest:
         """R30: one writing suggestion for a topic, or None."""
 
+# ==========================================
+# [C 작업 영역] 실제 OpenAI API 구현 클래스
+# ==========================================
+class OpenAIQuestionAI:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    async def next_question(self, turns: list[Turn], avoid: list[str]) -> AIText:
+        avoid_str = "\n- ".join(avoid) if avoid else "없음"
+        
+        system_prompt = f"""
+        당신은 사용자의 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
+        이전 대화 기록을 분석하여 '단 하나의 꼬리 질문'을 작성하세요.
+        
+        [절대 규칙]
+        1. 아래 JSON으로 응답할 것: {{"next_question": "생성된 질문"}}
+        2. 복합 질문 절대 금지 (물음표 1개만 사용)
+        3. 아래 피해야 할 질문과 겹치지 않게 완전히 새로운 방향으로 작성하세요:
+        - {avoid_str}
+        4. 사용자의 답변에 없는 경험이나 감정을 지어내지 마세요.
+        """
+        
+        chat_history = []
+        for t in turns:
+            chat_history.append({"role": "assistant", "content": t.question})
+            if t.answer:
+                chat_history.append({"role": "user", "content": t.answer})
+                
+        messages = [{"role": "system", "content": system_prompt}] + chat_history
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+            result = json.loads(response.choices[0].message.content)
+            return AIText(
+                text=result.get("next_question", "질문을 생성하지 못했습니다."),
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens
+            )
+        except Exception as e:
+            raise AIError(f"OpenAI API 실패: {str(e)}")
+
+    async def daily_questions(self, for_date: date) -> AIQuestions:
+        # 실제 운영 시 매일 공통 질문을 동적으로 생성하거나 DB에서 가져올 수 있음
+        # 현재는 Stub의 공통 질문 방식을 차용
+        shift = for_date.toordinal() % len(_STUB_DAILY)
+        questions = _STUB_DAILY[shift:] + _STUB_DAILY[:shift]
+        return AIQuestions(questions=questions, input_tokens=0, output_tokens=0)
+
+
+class OpenAIMaterialAI:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    async def extract_material(self, source: ExtractSource, topics: list[str]) -> AIExtract:
+        user_text = source.user_text().strip()
+        if not user_text:
+            return AIExtract(material=None, input_tokens=0, output_tokens=0)
+            
+        topics_str = ", ".join(topics)
+        
+        system_prompt = f"""
+        당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
+        반드시 아래 JSON 형식으로만 응답하세요.
+        {{
+            "title": "추출된 소재의 핵심을 담은 짧은 제목",
+            "summary": "핵심 내용을 1문장으로 요약 (절대 비워두지 말 것)",
+            "keywords": ["핵심단어1", "핵심단어2"],
+            "topic": "선택된 주제",
+            "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
+        }}
+        
+        [서버 검증 필수 통과 규칙]
+        1. evidence (근거 문장): 사용자의 원본 기록에서 글자 하나 틀리지 않고 100% 동일하게 발췌해야 합니다. AI가 임의로 다듬거나 지어내면 실패 처리됩니다.
+        2. topic (주제): 반드시 다음 제공된 목록 중 1개만 선택하세요. [{topics_str}]
+        3. keywords (키워드 추천용): 
+           - 조사 및 어미 제거: 명사형 단어만 남기세요. (예: "엄마랑" -> "엄마")
+           - 구절 금지 및 복합 명사 허용: "엄마의 반찬을 먹었다" 같은 서술어가 포함된 구절은 금지. 단, "수면 부족"처럼 의미 보존을 위해 꼭 필요한 '복합 명사'는 허용.
+           - 엄격한 동의어 통일: "어머니"와 "엄마"처럼 완벽히 동일한 대상을 지칭할 때만 대표 명사로 통일.
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2 
+            )
+            result = json.loads(response.choices[0].message.content)
+            
+            # 서버 검증(빈 값) 1차 방어
+            if not result.get("summary") or not result.get("evidence"):
+                return AIExtract(material=None, input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens)
+                
+            material = ExtractedMaterial(
+                title=result.get("title", ""),
+                summary=result.get("summary", ""),
+                evidence=result.get("evidence", ""),
+                keywords=result.get("keywords", []),
+                topics=[result.get("topic", "")]
+            )
+            return AIExtract(
+                material=material,
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens
+            )
+        except Exception as e:
+            raise AIError(f"Material 추출 실패: {str(e)}")
+
+
+class OpenAIEssayAI:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    async def write_essay(self, inp: DraftInput) -> AIEssay:
+        # 다시 만들기(재생성)인 경우, 기존 텍스트를 기반으로 교정(retouch) 모드 수행
+        if inp.base_body:
+            return await self._retouch_essay(inp)
+            
+        # 초안 생성 모드
+        system_prompt = f"""
+        당신은 사용자의 기록을 바탕으로 에세이를 작성하는 전문 작가입니다.
+        
+        [절대 규칙]
+        1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
+        2. 사용자가 제시한 '글의 방향'을 글의 핵심 주제와 흐름으로 삼아 자연스럽게 전개하세요.
+        3. 사용자가 요청한 문체({inp.style})로 작성하고, 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞춰 작성하세요.
+        4. 반드시 아래 JSON 형식으로만 응답하세요.
+        {{
+            "title": "에세이 제목",
+            "body": "작성된 에세이 초안 본문"
+        }}
+        """
+        
+        materials_info = []
+        for m in inp.materials:
+            materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
+        materials_text = "\n".join(materials_info)
+        
+        user_prompt = f"- 글의 방향: {inp.direction or '없음'}\n[소재 목록]\n{materials_text}"
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+            )
+            result = json.loads(response.choices[0].message.content)
+            return AIEssay(
+                title=result.get("title", "오늘의 글"),
+                body=result.get("body", ""),
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens
+            )
+        except Exception as e:
+            raise AIError(f"Essay 초안 생성 실패: {str(e)}")
+            
+    async def _retouch_essay(self, inp: DraftInput) -> AIEssay:
+        system_prompt = f"""
+        당신은 에세이 전문 교정 편집자입니다.
+        사용자가 '직접 수정한 초안'을 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
+        
+        [수정 지침]
+        1. 사용자가 수정한 문장과 흐름, 의도를 최대한 보존하세요.
+        2. 사용자가 요청한 '문체({inp.style})'에 맞춰 교정하세요.
+        3. 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞추세요.
+        4. 제공된 소재에 없는 새로운 사실을 임의로 지어내지 마세요.
+
+        [절대 규칙]
+        반드시 아래 JSON 형식으로 응답하세요.
+        {{
+            "title": "수정된 제목",
+            "body": "수정된 에세이 본문"
+        }}
+        """
+        
+        materials_info = []
+        for m in inp.materials:
+            materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
+        materials_text = "\n".join(materials_info)
+        
+        user_prompt = f"- 현재 제목: {inp.base_title}\n- 현재 초안 본문:\n{inp.base_body}\n\n- 남은 소재 목록:\n{materials_text}"
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+            )
+            result = json.loads(response.choices[0].message.content)
+            return AIEssay(
+                title=result.get("title", inp.base_title),
+                body=result.get("body", ""),
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens
+            )
+        except Exception as e:
+            raise AIError(f"Essay 다시 만들기 실패: {str(e)}")
+
+
+class OpenAISuggestAI:
+    def __init__(self):
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    async def suggest(self, topic: str, materials: list[SuggestMaterial], min_materials: int) -> AISuggest:
+        valid_ids = [m.id for m in materials]
+        materials_info = [f"- ID: {m.id} | 제목: {m.title} | 요약: {m.summary}" for m in materials]
+        materials_text = "\n".join(materials_info)
+        valid_ids_str = ", ".join(map(str, valid_ids))
+        
+        system_prompt = f"""
+        당신은 사용자의 기록을 엮어서 '{topic}' 주제의 완성된 글을 쓰도록 기획안을 제안하는 전문 에디터입니다.
+        
+        [서버 검증 필수 통과 규칙]
+        1. 반드시 아래 JSON 형식으로만 응답하세요.
+        {{
+            "title": "글의 핵심 주제를 담은 짧은 제목",
+            "direction": "글을 어떻게 엮을지 구조를 지시하는 명확한 한 문장",
+            "reason": "왜 이 소재들이 묶였는지 '실제 소재 내용'을 바탕으로 설명하는 추천 이유",
+            "material_ids": [선택한 소재 ID 배열]
+        }}
+        2. title, direction, reason 중 하나라도 비어있으면 안 됩니다.
+        3. material_ids: 반드시 제공된 소재 ID 목록 [{valid_ids_str}] 안에서만 선택해야 하며, 최소 {min_materials}개 이상을 사용할 순서대로 나열해야 합니다.
+        """
+        
+        user_prompt = f"주제: {topic}\n최소 선택 개수: {min_materials}개\n\n[소재 목록]\n{materials_text}"
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+            )
+            result = json.loads(response.choices[0].message.content)
+            
+            # 서버 검증(개수 미달) 방어 로직: 부적합 시 None 반환 (제안 숨김)
+            selected_ids = result.get("material_ids", [])
+            if not isinstance(selected_ids, list) or len(selected_ids) < min_materials:
+                return AISuggest(suggestion=None, input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens)
+                
+            suggestion = AISuggestion(
+                title=result.get("title", ""),
+                direction=result.get("direction", ""),
+                reason=result.get("reason", ""),
+                material_ids=selected_ids
+            )
+            return AISuggest(
+                suggestion=suggestion,
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens
+            )
+        except Exception as e:
+            raise AIError(f"Suggest 제안 실패: {str(e)}")
+
 
 # ---------------------------------------------------------------------------
 # Stub: fixed sample questions so A can build screens before C's model is in.
@@ -241,13 +512,13 @@ class StubQuestionAI:
         return AIQuestions(_STUB_DAILY[shift:] + _STUB_DAILY[:shift], 0, 0)
 
 
-@lru_cache
-def get_question_ai() -> QuestionAI:
-    """FastAPI dependency. Tests override it to simulate failures."""
-    provider = get_settings().ai_provider
-    if provider == "stub":
-        return StubQuestionAI()
-    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+# @lru_cache
+# def get_question_ai() -> QuestionAI:
+#     """FastAPI dependency. Tests override it to simulate failures."""
+#     provider = get_settings().ai_provider
+#     if provider == "stub":
+#         return StubQuestionAI()
+#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
@@ -290,13 +561,13 @@ class StubMaterialAI:
         return AIExtract(material, 0, 0)
 
 
-@lru_cache
-def get_material_ai() -> MaterialAI:
-    """FastAPI dependency. Tests override it to simulate failures."""
-    provider = get_settings().ai_provider
-    if provider == "stub":
-        return StubMaterialAI()
-    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+# @lru_cache
+# def get_material_ai() -> MaterialAI:
+#     """FastAPI dependency. Tests override it to simulate failures."""
+#     provider = get_settings().ai_provider
+#     if provider == "stub":
+#         return StubMaterialAI()
+#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
@@ -320,13 +591,13 @@ class StubEssayAI:
         return AIEssay(title=title, body=body, input_tokens=0, output_tokens=0)
 
 
-@lru_cache
-def get_essay_ai() -> EssayAI:
-    """FastAPI dependency. Tests override it to simulate failures."""
-    provider = get_settings().ai_provider
-    if provider == "stub":
-        return StubEssayAI()
-    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+# @lru_cache
+# def get_essay_ai() -> EssayAI:
+#     """FastAPI dependency. Tests override it to simulate failures."""
+#     provider = get_settings().ai_provider
+#     if provider == "stub":
+#         return StubEssayAI()
+#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
@@ -347,10 +618,49 @@ class StubSuggestAI:
         ), 0, 0)
 
 
+# @lru_cache
+# def get_suggest_ai() -> SuggestAI:
+#     """FastAPI dependency. Tests override it to simulate failures."""
+#     provider = get_settings().ai_provider
+#     if provider == "stub":
+#         return StubSuggestAI()
+#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+@lru_cache
+def get_question_ai() -> QuestionAI:
+    provider = get_settings().ai_provider
+    if provider == "openai":
+        return OpenAIQuestionAI()
+    if provider == "stub":
+        return StubQuestionAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
+@lru_cache
+def get_material_ai() -> MaterialAI:
+    provider = get_settings().ai_provider
+    if provider == "openai":
+        return OpenAIMaterialAI()
+    if provider == "stub":
+        return StubMaterialAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
+@lru_cache
+def get_essay_ai() -> EssayAI:
+    provider = get_settings().ai_provider
+    if provider == "openai":
+        return OpenAIEssayAI()
+    if provider == "stub":
+        return StubEssayAI()
+    raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
+
+
 @lru_cache
 def get_suggest_ai() -> SuggestAI:
-    """FastAPI dependency. Tests override it to simulate failures."""
     provider = get_settings().ai_provider
+    if provider == "openai":
+        return OpenAISuggestAI()
     if provider == "stub":
         return StubSuggestAI()
     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
