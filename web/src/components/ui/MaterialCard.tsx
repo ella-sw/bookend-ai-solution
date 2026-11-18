@@ -61,7 +61,7 @@ export function MaterialCard({
             <Tag key={topic}>{topic}</Tag>
           ))}
           {date && <span className="ml-auto">{date}</span>}
-          {usedCount !== undefined && usedCount > 0 && <span>· 글 {usedCount}편에 사용</span>}
+          {usedCount !== undefined && <span>· 글 {usedCount}편에 사용</span>}
         </div>
       )}
     </div>

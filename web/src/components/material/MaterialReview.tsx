@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLeaveGuard } from "@/components/collect/useLeaveGuard";
 import {
   BottomActionBar,
@@ -19,9 +19,7 @@ import {
   deleteRecord,
   getOriginal,
   keepOriginal,
-  MATERIAL_RULES,
   reanalyze,
-  TOPICS,
   waitForAnalysis,
   type AnalysisMaterial,
   type AnalysisState,
@@ -30,40 +28,13 @@ import {
   type Original,
 } from "@/lib/api";
 import { collectRoutes, routes } from "@/lib/routes";
+import { formOf, MaterialFields, OriginalText, sameForm, validate, type FieldErrors, type Form } from "./MaterialFields";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 /** 보관한 소재 (보관 완료 화면에 보여 줄 만큼) */
 type KeptMaterial = Pick<AnalysisMaterial, "id" | "title" | "summary" | "keywords" | "topics">;
 
 const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
-
-/** 고치는 칸 */
-type Form = { title: string; summary: string; keywords: string[]; topics: number[] };
-type FieldErrors = Partial<Record<keyof Form | "form", string>>;
-
-const formOf = (m: AnalysisMaterial | null): Form => ({
-  title: m?.title ?? "",
-  summary: m?.summary ?? "",
-  keywords: m?.keywords ?? [],
-  topics: m?.topics.map((t) => t.id) ?? [],
-});
-
-const sameForm = (a: Form, b: Form) =>
-  a.title === b.title &&
-  a.summary === b.summary &&
-  a.keywords.join("\n") === b.keywords.join("\n") &&
-  [...a.topics].sort().join(",") === [...b.topics].sort().join(",");
-
-/** B ConfirmIn과 같은 규칙으로 화면에서 먼저 확인 */
-function validate(form: Form): FieldErrors {
-  const errors: FieldErrors = {};
-  if (form.title.trim().length > MATERIAL_RULES.titleMax) errors.title = `제목은 ${MATERIAL_RULES.titleMax}자까지 적을 수 있어요`;
-  const summary = form.summary.trim();
-  if (!summary) errors.summary = "소재 요약을 적어 주세요";
-  else if (summary.length > MATERIAL_RULES.summaryMax) errors.summary = `요약은 ${MATERIAL_RULES.summaryMax}자까지 적을 수 있어요`;
-  if (form.topics.length === 0) errors.topics = "주제를 하나 이상 골라 주세요";
-  return errors;
-}
 
 /**
  * M120 소재 확인 (UI 설계서 v7 12쪽, 목록 9·21·22번)
@@ -80,10 +51,12 @@ function validate(form: Form): FieldErrors {
  */
 export default function MaterialReviewScreen({ recordId }: { recordId: string }) {
   const { bfcacheId } = useRouter();
-  return <MaterialReview key={`${bfcacheId}:${recordId}`} recordId={recordId} />;
+  // ?manual=1: 보관한 원본(M130)의 [직접 정리하기] → 실패면 직접 정리하기 칸을 바로 연다
+  const openManual = useSearchParams().get("manual") === "1";
+  return <MaterialReview key={`${bfcacheId}:${recordId}:${openManual}`} recordId={recordId} openManual={openManual} />;
 }
 
-function MaterialReview({ recordId }: { recordId: string }) {
+function MaterialReview({ recordId, openManual }: { recordId: string; openManual: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
@@ -103,6 +76,7 @@ function MaterialReview({ recordId }: { recordId: string }) {
   const [leaveOpen, setLeaveOpen] = useState(false);
   /** 실패 뒤 [직접 정리하기] 중 */
   const [manual, setManual] = useState(false);
+  const manualOpened = useRef(false);
   /** 다시 분석·원본만 보관·기록 삭제·새로 시작 요청 중 */
   const [acting, setActing] = useState<"reanalyze" | "keep" | "delete" | "restart" | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -151,9 +125,17 @@ function MaterialReview({ recordId }: { recordId: string }) {
       }
       applyState(res.data);
       setSlow(res.data.analysis_status === "analyzing");
+      // ?manual=1이고 실패면 직접 정리하기 칸을 바로 연다 (들어올 때 한 번)
+      if (openManual && !manualOpened.current && res.data.analysis_status === "failed" && !res.data.material) {
+        manualOpened.current = true;
+        const empty = formOf(null);
+        setForm(empty);
+        setInitialForm(empty);
+        setManual(true);
+      }
     });
     return () => controller.abort(); // 화면을 나가면 기다림만 멈춘다 (분석은 서버에서 계속)
-  }, [recordId, waitAttempt, applyState, handleCommonError]);
+  }, [recordId, waitAttempt, applyState, handleCommonError, openManual]);
 
   /* ---------- 나가기 ---------- */
 
@@ -471,144 +453,6 @@ const toKept = (d: MaterialDetail): KeptMaterial => ({
   topics: d.topics,
 });
 
-/* ---------- 고치는 칸 (제목·요약·키워드·주제) ---------- */
-
-function MaterialFields({
-  form,
-  setForm,
-  errors,
-  disabled,
-}: {
-  form: Form;
-  setForm: (updater: (f: Form) => Form) => void;
-  errors: FieldErrors;
-  disabled: boolean;
-}) {
-  const [keywordInput, setKeywordInput] = useState("");
-  const [keywordError, setKeywordError] = useState<string | null>(null);
-
-  const addKeyword = () => {
-    const k = keywordInput.trim();
-    if (!k) return;
-    if (k.length > MATERIAL_RULES.keywordMax) {
-      setKeywordError(`키워드는 ${MATERIAL_RULES.keywordMax}자까지 적을 수 있어요`);
-      return;
-    }
-    if (form.keywords.length >= MATERIAL_RULES.keywordsMax) {
-      setKeywordError(`키워드는 ${MATERIAL_RULES.keywordsMax}개까지 넣을 수 있어요`);
-      return;
-    }
-    setKeywordError(null);
-    setKeywordInput("");
-    if (!form.keywords.includes(k)) setForm((f) => ({ ...f, keywords: [...f.keywords, k] }));
-  };
-
-  const toggleTopic = (id: number) =>
-    setForm((f) => ({ ...f, topics: f.topics.includes(id) ? f.topics.filter((t) => t !== id) : [...f.topics, id] }));
-
-  return (
-    <>
-      <Field label="제목 (선택)" error={errors.title}>
-        <input
-          type="text"
-          value={form.title}
-          onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-          maxLength={MATERIAL_RULES.titleMax}
-          disabled={disabled}
-          className="h-11 w-full rounded-xl border border-line px-3 text-[15px] outline-none focus:border-ink disabled:opacity-60"
-        />
-      </Field>
-
-      <Field label="소재" error={errors.summary} hint={`${form.summary.trim().length}/${MATERIAL_RULES.summaryMax}`}>
-        <textarea
-          value={form.summary}
-          onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))}
-          maxLength={MATERIAL_RULES.summaryMax}
-          rows={3}
-          disabled={disabled}
-          className="w-full resize-none rounded-xl border border-line px-3 py-2.5 text-[15px] leading-relaxed outline-none focus:border-ink disabled:opacity-60"
-        />
-      </Field>
-
-      <Field label="키워드" error={keywordError ?? undefined}>
-        <div className="flex flex-wrap gap-2">
-          {form.keywords.map((k) => (
-            <span key={k} className="inline-flex h-8 items-center gap-1 rounded-full bg-subtle pr-1 pl-3 text-[13px]">
-              {k}
-              <button
-                type="button"
-                aria-label={`${k} 빼기`}
-                disabled={disabled}
-                onClick={() => setForm((f) => ({ ...f, keywords: f.keywords.filter((x) => x !== k) }))}
-                className="flex size-6 items-center justify-center rounded-full text-ink-mute active:bg-line"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          {form.keywords.length < MATERIAL_RULES.keywordsMax && (
-            <form
-              className="inline-flex h-8 items-center rounded-full border border-dashed border-line pr-1 pl-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                addKeyword();
-              }}
-            >
-              <input
-                value={keywordInput}
-                onChange={(e) => setKeywordInput(e.target.value)}
-                maxLength={MATERIAL_RULES.keywordMax}
-                disabled={disabled}
-                placeholder="키워드"
-                aria-label="키워드 추가"
-                className="w-20 bg-transparent text-[13px] outline-none"
-              />
-              <button type="submit" aria-label="키워드 추가" disabled={disabled} className="flex size-6 items-center justify-center text-ink-soft">
-                +
-              </button>
-            </form>
-          )}
-        </div>
-      </Field>
-
-      <Field label="주제" error={errors.topics}>
-        <div className="flex flex-wrap gap-2">
-          {TOPICS.map((t) => {
-            const selected = form.topics.includes(t.id);
-            return (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={selected}
-                disabled={disabled}
-                onClick={() => toggleTopic(t.id)}
-                className={`inline-flex h-8 items-center rounded-full border px-3 text-[13px] ${
-                  selected ? "border-ink bg-ink font-semibold text-white" : "border-line text-ink-soft active:bg-subtle"
-                }`}
-              >
-                {t.name}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-    </>
-  );
-}
-
-function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-ink-soft">{label}</span>
-        {hint && <span className="text-xs text-ink-mute">{hint}</span>}
-      </div>
-      {children}
-      {error && <p className="text-xs text-danger">{error}</p>}
-    </div>
-  );
-}
-
 /* ---------- 근거 문장 · 원문 보기 ---------- */
 
 function Evidence({ recordId, evidence }: { recordId: string; evidence: string | null }) {
@@ -650,27 +494,6 @@ function Evidence({ recordId, evidence }: { recordId: string; evidence: string |
         </div>
       )}
     </div>
-  );
-}
-
-export function OriginalText({ original }: { original: Original }) {
-  if (original.record_type === "free") {
-    return (
-      <div className="flex flex-col gap-2">
-        {original.title && <p className="font-semibold text-ink">{original.title}</p>}
-        <p className="whitespace-pre-wrap">{original.body}</p>
-      </div>
-    );
-  }
-  return (
-    <dl className="flex flex-col gap-3">
-      {original.messages.map((m) => (
-        <div key={m.seq}>
-          <dt className="font-semibold text-ink">{m.question}</dt>
-          <dd className="mt-1 whitespace-pre-wrap">{m.answer}</dd>
-        </div>
-      ))}
-    </dl>
   );
 }
 

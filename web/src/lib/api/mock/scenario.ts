@@ -13,6 +13,8 @@ import type { MockKey } from "./keys";
  *     시간 초과 → 분석 중으로 있다가 시작 후 60초가 지나면 failed
  *   · analysis.start: 실패·연결 끊김·시간 초과 → 저장 때 분석 시작 실패(failed), 다시 분석 요청 실패 /
  *     하루 한도 → 저장 때 failed + daily_limit_reached, 다시 분석 429 daily_limit
+ * - 다시 분석 (M131): 결과는 material.reanalysis.result 키로 고른다 (정상 → 2~4번째 조회에서 done /
+ *   빈 결과 → empty / 실패 → failed / 시간 초과 → 60초 뒤 failed). material.reanalyze를 '하루 한도'로 두면 429 daily_limit
  * - unauthorized: 세션 무효 (SDK가 세션을 지운 경우 흉내) → 목업 세션을 지우고 kind = unauthorized
  * - not_consented: 동의 전 → 403 not_consented (GET /me는 404, users.ts가 kind = not_consented로 바꿈). 세션 유지
  * 이 브라우저에만 저장된다 (개발용). 저장이 막힌 환경이면 기본값(ok)으로 동작.
