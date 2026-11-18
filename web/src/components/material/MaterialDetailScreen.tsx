@@ -33,6 +33,7 @@ import {
   type MaterialDetail,
 } from "@/lib/api";
 import { formatMonthDay, RECORD_TYPE_LABEL } from "@/lib/format";
+import { newEssayHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { formOf, MaterialFields, OriginalText, sameForm, validate, type FieldErrors, type Form } from "./MaterialFields";
@@ -346,7 +347,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
         <>
           <BottomActionBarSpacer />
           <BottomActionBar>
-            <ButtonLink href={`${routes.newSelect}?selected=${detail.id}`} block size="lg">
+            <ButtonLink href={newEssayHref(routes.newSelect, { m: [detail.id], from: "material_detail" })} block size="lg">
               이 소재로 글쓰기
             </ButtonLink>
           </BottomActionBar>
