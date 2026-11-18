@@ -246,3 +246,4 @@ def recommend_proposal(req: ProposalRequest):
         # temperature=0.7
     )
     return json.loads(response.choices[0].message.content)
+
