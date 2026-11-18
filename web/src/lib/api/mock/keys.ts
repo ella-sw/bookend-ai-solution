@@ -42,6 +42,10 @@ export const MOCK_KEYS = {
   "essays.draft.get": "직접 쓰기 임시 저장 불러오기 (H121·N140)",
   "essays.draft.save": "직접 쓰기 임시 저장 (N140)",
   "essays.save": "직접 쓰기 저장 → v1 (N140)",
+  "essays.get": "글 상세 (W330·L120)",
+  "essays.ai.create": "AI 초안 만들기 (W320 → W330)",
+  "essays.regenerate": "다시 만들기 (W340)",
+  "essays.regeneration.save": "다시 만든 결과 저장 (W341)",
   "settings.clear": "모든 기록 지우기 (S120)",
   "events.log": "이벤트 기록",
 } as const;

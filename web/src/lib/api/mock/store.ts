@@ -154,8 +154,27 @@ export interface MockVersion {
   title: string | null;
   body: string;
   save_token: string | null;
+  /** AI 글일 때 */
+  style?: "감성적" | "담백함" | null;
+  length?: "short" | "long" | null;
+  regen_count?: number;
+  based_on_version_id?: Uuid | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 다시 만든 결과 (B: ai_requests.result, kind = regen). 저장하면 비운다 (saved = true) */
+export interface MockRegen {
+  request_id: number;
+  essay_id: Uuid;
+  title: string;
+  body: string;
+  style: "감성적" | "담백함";
+  length: "short" | "long";
+  regen_count: number;
+  based_on_version_id: Uuid;
+  deleted_materials_left_out: boolean;
+  saved: boolean;
 }
 
 export interface MockEssay {
@@ -192,6 +211,8 @@ export interface MockDb {
   suggestions: MockSuggestion[];
   /** 글 (직접 쓰기 임시 저장 1개 + 저장한 글) */
   essays: MockEssay[];
+  /** 다시 만든 결과 (request_id → 결과) */
+  regens: Record<string, MockRegen>;
   /** 저장한 글 id (essays). 이벤트 essay_id 확인용 — 글 기능 목업은 아직 없음 */
   essayIds: Uuid[];
   /** 보관한 소재의 다시 분석 (M131, B: 소재를 확정한 뒤 시작한 최근 분석 요청). 소재 id → 진행·결과 */
@@ -261,6 +282,7 @@ function createDb(): MockDb {
       },
     ],
     essays: [],
+    regens: {},
     essayIds: MOCK_ESSAYS.map((e) => e.id),
     reanalyses: {},
     nextRequestId: 1,
@@ -274,7 +296,7 @@ let db: MockDb | null = null;
  * 목업 DB를 이 탭의 sessionStorage에 남긴다 → 새로고침·주소 직접 입력에도 데이터가 그대로 (탭을 닫으면 사라짐).
  * 저장 모양이 바뀌면 키의 버전을 올린다 (예전 데이터는 버리고 처음 상태로)
  */
-const DB_STORAGE_KEY = "rowflow.mock.db.v1";
+const DB_STORAGE_KEY = "rowflow.mock.db.v2";
 
 function loadStoredDb(): MockDb | null {
   try {
@@ -321,6 +343,7 @@ export function clearUserData() {
   d.analyses = {};
   d.suggestions = [];
   d.essays = [];
+  d.regens = {};
   d.essayIds = [];
   d.reanalyses = {};
 }

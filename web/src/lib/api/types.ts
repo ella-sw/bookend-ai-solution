@@ -364,6 +364,17 @@ export interface SuggestionList {
 
 /* ---------- 글 (N140 · L110 · L120) — B essays.py ---------- */
 
+/** AI 초안 문체 (W310) */
+export type Style = "감성적" | "담백함";
+/** AI 초안 길이 (W320): 단문 / 장문 */
+export type EssayLength = "short" | "long";
+
+/** 길이 범위 (본문만, 공백 포함, 제목 제외). 벗어나면 서버가 1회 다시 쓰고, 그래도 벗어나면 in_length_range = false */
+export const LENGTH_RANGE: Record<EssayLength, readonly [number, number]> = {
+  short: [300, 500],
+  long: [1000, 1500],
+};
+
 /** B essays.py 제한 */
 export const ESSAY_RULES = {
   titleMax: 100,
@@ -403,8 +414,8 @@ export interface Version {
   /** 본문만, 공백 포함, 제목 제외 */
   char_count: number;
   /** 감성적 / 담백함 (AI일 때) */
-  style: string | null;
-  length: "short" | "long" | null;
+  style: Style | null;
+  length: EssayLength | null;
   /** 고른 길이 범위 밖이면 false → 실제 글자 수를 보여 줌. 직접 쓴 글은 null */
   in_length_range: boolean | null;
   /** 몇 번째로 다시 만든 글인지 (0 = 다시 만들기 아님) */
@@ -451,6 +462,41 @@ export interface SaveEssayDraftInput {
 /** [저장] 첫 저장 → v1 (B: FirstSaveIn). save_token은 N140을 열 때 한 번 만들고 [다시 시도]에도 같은 값 */
 export interface SaveEssayInput extends SaveEssayDraftInput {
   save_token: string;
+}
+
+/* ---------- AI 초안 (W310~W341) — B ai_essays.py ---------- */
+
+/** [에세이 만들기] (B: FirstDraftIn). save_token은 처음 누를 때 하나, [다시 시도]에도 같은 값 */
+export interface CreateAiDraftInput {
+  /** 고른 소재 (1개 이상), 고른 순서대로 */
+  material_ids: Uuid[];
+  direction?: string | null;
+  style: Style;
+  length: EssayLength;
+  suggestion_id?: Uuid | null;
+  save_token: string;
+}
+
+/** [다시 만들기] 바탕: 보고 있던 버전 또는 직전에 다시 만든(저장 안 한) 결과 중 하나 */
+export type RegenerateBase = { based_on_version_id: Uuid } | { based_on_request_id: number };
+
+/** 다시 만든 결과 (B: RegenResult). 저장하기 전까지 버전이 아니다 */
+export interface RegenResult {
+  /** [저장하기]에 쓰는 번호 */
+  request_id: number;
+  essay_id: Uuid;
+  title: string;
+  body: string;
+  char_count: number;
+  in_length_range: boolean;
+  style: Style;
+  length: EssayLength;
+  /** '다시 만들기 N회째' */
+  regen_count: number;
+  /** 저장하면 이 버전을 바탕으로 한 것으로 남는다 */
+  based_on_version_id: Uuid;
+  /** '삭제한 소재는 새로 넣지 않아요' 안내 */
+  deleted_materials_left_out: boolean;
 }
 
 /** 홈(H110) 한 번에 받기 */

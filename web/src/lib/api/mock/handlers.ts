@@ -7,8 +7,12 @@ import type {
   HomeSummary,
   Material,
   MaterialDetail,
+  CreateAiDraftInput,
   EditMaterialInput,
   Essay,
+  EssayLength,
+  RegenResult,
+  Style,
   EssayDraft,
   MaterialRef,
   RelatedMaterial,
@@ -25,7 +29,7 @@ import type {
   RecordItem,
   RecordType,
 } from "../types";
-import { ESSAY_RULES, MATERIAL_RULES, QNA_RULES, TOPICS } from "../types";
+import { ESSAY_RULES, LENGTH_RANGE, MATERIAL_RULES, QNA_RULES, TOPICS } from "../types";
 import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
@@ -40,6 +44,7 @@ import {
   persistDb,
   topicId,
   type MockEssay,
+  type MockRegen,
   type MockMessage,
   type MockReanalysis,
   type MockSuggestion,
@@ -678,10 +683,10 @@ function essayOf(e: MockEssay): Essay {
         title: v.title,
         body: v.body,
         char_count: v.body.length,
-        style: null,
-        length: null,
-        in_length_range: null,
-        regen_count: 0,
+        style: v.style ?? null,
+        length: v.length ?? null,
+        in_length_range: v.length ? inRange(v.length, v.body.length) : null,
+        regen_count: v.regen_count ?? 0,
         created_at: v.created_at,
         updated_at: v.updated_at,
       })),
@@ -751,6 +756,68 @@ function relatedMaterials(selected: string[], limit = 5): RelatedMaterial[] {
       shared_topics: sharedTopics,
       shared_keywords: sharedKeywords,
     }));
+}
+
+/* ---------- AI 초안 (B ai_essays.py) ---------- */
+
+const inRange = (length: EssayLength, n: number) => n >= LENGTH_RANGE[length][0] && n <= LENGTH_RANGE[length][1];
+
+/** 이 길이에 맞춰 문장을 이어 붙인다. outOfRange면 일부러 범위보다 짧게 */
+function fitLength(sentences: string[], length: EssayLength, outOfRange: boolean): string {
+  const [lo, hi] = LENGTH_RANGE[length];
+  const target = outOfRange ? Math.floor(lo * 0.7) : Math.floor((lo + hi) / 2);
+  const pool = sentences.length > 0 ? sentences : ["그날의 장면이 아직 마음에 남아 있다."];
+  let text = "";
+  for (let i = 0; text.length < target; i++) text += (text ? " " : "") + pool[i % pool.length];
+  if (!outOfRange && text.length > hi) text = text.slice(0, hi - 1) + ".";
+  return text;
+}
+
+const STYLE_LINES: Record<Style, string[]> = {
+  감성적: ["그 순간의 공기가 아직도 손끝에 남아 있는 것 같다.", "마음 한쪽이 조용히 따뜻해졌다."],
+  담백함: ["그날 있었던 일은 그게 전부였다.", "지금 생각해도 그 장면은 또렷하다."],
+};
+
+/** 고른 소재로 목업 글을 만든다 (소재 요약·근거 + 문체 문장) */
+function writeMockEssay(materialIds: string[], style: Style, length: EssayLength, outOfRange: boolean, base?: string) {
+  const db = getDb();
+  const mats = materialIds.map((id) => db.materials.find((m) => m.id === id)).filter((m): m is Material => !!m && !m.deleted_at);
+  const sentences = [
+    ...(base ? base.split(/(?<=[.!?。])\s+/).slice(0, 3).reverse() : []),
+    ...mats.flatMap((m) => [m.evidence, `${m.summary}.`].filter((x): x is string => !!x)),
+    ...STYLE_LINES[style],
+  ];
+  return {
+    title: mats[0]?.title ? `${mats[0].title}, 그리고 그 뒤` : "그날의 기록",
+    body: fitLength(sentences, length, outOfRange),
+  };
+}
+
+function checkStyleLength(input: { style?: unknown; length?: unknown }) {
+  if (input.style !== "감성적" && input.style !== "담백함") fail("bad_request");
+  if (input.length !== "short" && input.length !== "long") fail("bad_request");
+  return { style: input.style as Style, length: input.length as EssayLength };
+}
+
+/** 보고 있는 글 (B: status = saved). 없으면 404 essay_not_found */
+function savedEssay(id: string): MockEssay {
+  return getDb().essays.find((e) => e.id === id && e.status === "saved") ?? fail("not_found", "essay_not_found");
+}
+
+function regenResultOf(r: MockRegen): RegenResult {
+  return {
+    request_id: r.request_id,
+    essay_id: r.essay_id,
+    title: r.title,
+    body: r.body,
+    char_count: r.body.length,
+    in_length_range: inRange(r.length, r.body.length),
+    style: r.style,
+    length: r.length,
+    regen_count: r.regen_count,
+    based_on_version_id: r.based_on_version_id,
+    deleted_materials_left_out: r.deleted_materials_left_out,
+  };
 }
 
 /* ---------- 처리 함수 (키별) ---------- */
@@ -1267,6 +1334,133 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return essayOf(essay);
   },
 
+  // 글 상세 (B essays.py get_essay). 임시 저장은 404
+  "essays.get": ({ params }): Essay => essayOf(savedEssay(params.essayId)),
+
+  // [에세이 만들기] (B first_draft): 초안(version 0) 자동 보관. 같은 save_token이면 그 글 (AI 다시 안 부름)
+  "essays.ai.create": ({ body, scenario }): Essay => {
+    const db = getDb();
+    const input = (body ?? {}) as Partial<CreateAiDraftInput>;
+    const ids = Array.from(new Set(Array.isArray(input.material_ids) ? input.material_ids : []));
+    if (ids.length < 1 || ids.length > ESSAY_RULES.materialsMax) fail("bad_request");
+    const { style, length } = checkStyleLength(input);
+    const direction = typeof input.direction === "string" ? input.direction.trim() || null : null;
+    if (direction && direction.length > ESSAY_RULES.directionMax) fail("bad_request");
+    if (!input.save_token) fail("bad_request");
+    const done = db.essays.find((e) => e.versions.some((v) => v.save_token === input.save_token));
+    if (done) return essayOf(done);
+    if (ids.some((id) => !db.materials.some((m) => m.id === id && m.confirmed_at && !m.deleted_at))) {
+      fail("bad_request", "material_not_available");
+    }
+    if (input.suggestion_id && !db.suggestions.some((x) => x.id === input.suggestion_id)) fail("not_found", "suggestion_not_found");
+    if (scenario === "daily_limit") fail("bad_request", "daily_limit", 429);
+    if (scenario === "ai_fail") fail("server", "ai_failed", 502);
+
+    const out = writeMockEssay(ids, style, length, scenario === "length_out");
+    const t = now();
+    const essay: MockEssay = {
+      id: newId(),
+      method: "ai",
+      status: "saved",
+      title: out.title,
+      draft_body: null,
+      direction,
+      suggestion_id: input.suggestion_id ?? null,
+      material_ids: ids,
+      versions: [
+        { id: newId(), version_no: 0, kind: "ai_first", title: out.title, body: out.body, save_token: input.save_token!, style, length, regen_count: 0, based_on_version_id: null, created_at: t, updated_at: t },
+      ],
+      created_at: t,
+      updated_at: t,
+    };
+    db.essays.push(essay);
+    for (const id of ids) {
+      const m = db.materials.find((x) => x.id === id);
+      if (m) m.used_count += 1;
+    }
+    return essayOf(essay);
+  },
+
+  // [다시 만들기] (B regenerate): 보고 있던 버전 또는 직전 결과를 바탕으로. 저장 전까지 버전 아님
+  "essays.regenerate": ({ params, body, scenario }): RegenResult => {
+    const db = getDb();
+    const input = (body ?? {}) as { based_on_version_id?: string; based_on_request_id?: number; style?: unknown; length?: unknown };
+    const hasVersion = typeof input.based_on_version_id === "string";
+    const hasRequest = typeof input.based_on_request_id === "number";
+    if (hasVersion === hasRequest) fail("bad_request");
+    const { style, length } = checkStyleLength(input);
+    const essay = savedEssay(params.essayId);
+
+    let baseBody: string;
+    let baseTitle: string | null;
+    let versionId: string;
+    let count: number;
+    if (hasVersion) {
+      const v = essay.versions.find((x) => x.id === input.based_on_version_id) ?? fail("not_found", "version_not_found");
+      baseBody = v.body;
+      baseTitle = v.title;
+      versionId = v.id;
+      count = 1;
+    } else {
+      const prev = db.regens[String(input.based_on_request_id)];
+      if (!prev || prev.essay_id !== essay.id || prev.saved) fail("conflict", "no_result");
+      baseBody = prev!.body;
+      baseTitle = prev!.title;
+      versionId = prev!.based_on_version_id;
+      count = prev!.regen_count + 1;
+    }
+    if (scenario === "daily_limit") fail("bad_request", "daily_limit", 429);
+    if (scenario === "ai_fail") fail("server", "ai_failed", 502);
+
+    const live = essay.material_ids.filter((id) => db.materials.some((m) => m.id === id && !m.deleted_at));
+    const out = writeMockEssay(live, style, length, scenario === "length_out", baseBody);
+    const regen: MockRegen = {
+      request_id: db.nextRequestId++,
+      essay_id: essay.id,
+      title: baseTitle ?? out.title,
+      body: out.body,
+      style,
+      length,
+      regen_count: count,
+      based_on_version_id: versionId,
+      deleted_materials_left_out: scenario === "deleted_left_out" || live.length !== essay.material_ids.length,
+      saved: false,
+    };
+    db.regens[String(regen.request_id)] = regen;
+    return regenResultOf(regen);
+  },
+
+  // W341 [저장하기] (B save_regeneration): 다음 번호 버전. 같은 save_token이면 그 글. 결과가 없으면 409 no_result
+  "essays.regeneration.save": ({ params, body }): Essay => {
+    const db = getDb();
+    const essay = savedEssay(params.essayId);
+    const token = ((body ?? {}) as { save_token?: string }).save_token ?? fail("bad_request");
+    const done = db.essays.find((e) => e.versions.some((v) => v.save_token === token));
+    if (done) return essayOf(done);
+    const r = db.regens[params.requestId];
+    if (!r || r.essay_id !== essay.id || r.saved) fail("conflict", "no_result");
+    const t = now();
+    const next = Math.max(0, ...essay.versions.map((v) => v.version_no)) + 1;
+    essay.versions.push({
+      id: newId(),
+      version_no: next,
+      kind: "ai_regen",
+      title: r!.title || null,
+      body: r!.body,
+      save_token: token,
+      style: r!.style,
+      length: r!.length,
+      regen_count: r!.regen_count,
+      based_on_version_id: r!.based_on_version_id,
+      created_at: t,
+      updated_at: t,
+    });
+    r!.saved = true; // ERD 규칙 12: 저장하면 AI 결과를 비운다
+    essay.title = r!.title || null; // 글 제목 = 가장 최근 버전의 제목
+    essay.updated_at = t;
+    return essayOf(essay);
+  },
+
   "settings.clear": () => {
     clearUserData();
     return null;
@@ -1302,6 +1496,9 @@ const FAIL_DETAIL: Partial<Record<MockKey, { status: number; code: ApiErrorCode 
  */
 const SESSION_ONLY_KEYS: MockKey[] = ["me.get", "me.consent", "qna.daily"];
 
+/** AI를 부르는 키 (목업은 2~4초 걸려서 응답) */
+const AI_KEYS: MockKey[] = ["essays.ai.create", "essays.regenerate"];
+
 /** 분석 결과는 실패·시간 초과를 '요청 오류'가 아니라 '분석 실패 상태'로 돌려준다 */
 const RESULT_LEVEL_KEYS: MockKey[] = ["analysis.get"];
 
@@ -1315,7 +1512,9 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
   const session = getMockSession();
   if (!session) return { ok: false, error: apiError("unauthorized", 401) };
 
-  await sleep(settings.delayMs + (scenario === "slow" ? SLOW_EXTRA_MS : 0));
+  // AI 초안·다시 만들기는 2~4초 걸린다 ('응답 기다림'이 0이면 바로: 빠른 확인용)
+  const aiExtra = AI_KEYS.includes(key) && settings.delayMs > 0 ? 2_000 + Math.random() * 2_000 : 0;
+  await sleep(settings.delayMs + aiExtra + (scenario === "slow" ? SLOW_EXTRA_MS : 0));
 
   if (!resultLevel) {
     if (scenario === "timeout") {
