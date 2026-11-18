@@ -16,8 +16,8 @@ export const routes = {
   newSelect: "/new", // N110
   newDirection: "/new/direction", // N120
   suggestion: (suggestionId: string) => `/new/suggestion/${suggestionId}`, // N130
-  newWrite: "/new/write", // N140
-  draftOptions: "/new/draft", // W310 · W320
+  newDirect: "/new/write", // N140 직접 쓰기
+  newAiStyle: "/new/draft", // W310 · W320 AI 초안 문체·길이
   draftResult: "/new/draft/result", // W330
   draftRegenerate: "/new/draft/regenerate", // W340
   library: "/library", // L110
@@ -90,8 +90,8 @@ export const screens = [
   { id: "N110", name: "소재 고르기", href: routes.newSelect },
   { id: "N120", name: "글의 방향 확인", href: routes.newDirection },
   { id: "N130", name: "글쓰기 제안 상세", href: routes.suggestion("sample") },
-  { id: "N140", name: "직접 쓰기", href: routes.newWrite },
-  { id: "W310", name: "AI 초안 · 문체·길이 선택", href: routes.draftOptions },
+  { id: "N140", name: "직접 쓰기", href: routes.newDirect },
+  { id: "W310", name: "AI 초안 · 문체·길이 선택", href: routes.newAiStyle },
   { id: "W330", name: "AI 초안 · 초안 결과", href: routes.draftResult },
   { id: "W340", name: "AI 초안 · 다시 만든 결과", href: routes.draftRegenerate },
   { id: "L110", name: "내 서재", href: routes.library },

@@ -34,7 +34,7 @@ import {
   type MockSettings,
 } from "@/lib/api/mock/scenario";
 import { clearMockSession, startMockConsentedUser } from "@/lib/api/mock/session";
-import { fillMaterialBox, resetDb } from "@/lib/api/mock/store";
+import { fillMaterialBox, makeSampleSuggestion, resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
 export default function DevMockPage() {
@@ -189,6 +189,20 @@ export default function DevMockPage() {
               }}
             >
               소재함 데이터 채우기
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running || !USE_MOCK}
+              onClick={() => {
+                const made = makeSampleSuggestion();
+                setLog(
+                  made
+                    ? `제안을 만들었어요: ${made.title}. 주소 /new/suggestion/${made.id}`
+                    : "보관한 소재가 3개 이상 있어야 해요. [소재함 데이터 채우기]를 먼저 눌러 주세요",
+                );
+              }}
+            >
+              제안 하나 만들기
             </Button>
             <Button
               variant="secondary"

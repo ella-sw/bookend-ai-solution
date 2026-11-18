@@ -7,6 +7,7 @@ import type {
   MaterialBox,
   MaterialDetail,
   Original,
+  RelatedMaterial,
 } from "./types";
 
 /* ---------- 소재 분석 (M120) — B routers/analysis.py ---------- */
@@ -167,5 +168,18 @@ export function deleteMaterial(materialId: string) {
     method: "DELETE",
     path: `/materials/${materialId}`,
     mock: { key: "material.delete", params: { materialId } },
+  });
+}
+
+/**
+ * N110 함께 쓰면 좋은 소재: 고른 소재와 주제·키워드가 같은 보관 확정 소재 (AI 없음, 최대 5개).
+ * 아무것도 안 골랐으면 []. 고른 id 중 쓸 수 없는 소재가 있으면 404 material_not_found
+ */
+export function getRelatedMaterials(selectedIds: readonly string[]) {
+  return request<RelatedMaterial[]>({
+    method: "GET",
+    path: "/materials/related",
+    query: { selected: selectedIds },
+    mock: { key: "materials.related" },
   });
 }

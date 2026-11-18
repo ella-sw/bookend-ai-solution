@@ -323,26 +323,142 @@ export interface EditMaterialInput {
   topics?: number[];
 }
 
-/* ---------- 글쓰기 제안 ---------- */
+/* ---------- 함께 쓰면 좋은 소재 (N110) — B materials.py related_materials ---------- */
 
-export type SuggestionStatus = "computing" | "ready" | "none" | "failed";
+/** 고른 소재와 주제·키워드가 같은 소재 (B: RelatedMaterial). AI 없이 점수로 정렬, 최대 5개 */
+export interface RelatedMaterial extends MaterialCard {
+  /** 고른 소재와 같은 주제 이름 ('같은 주제: 가족') */
+  shared_topics: string[];
+  /** 고른 소재와 같은 키워드 */
+  shared_keywords: string[];
+}
 
-export interface SuggestionCard {
+/* ---------- 글쓰기 제안 (H110 · N130) — B suggestions.py ---------- */
+
+/** 제안에 쓸 소재 (순서대로) */
+export interface SuggestionMaterial {
   id: Uuid;
-  topic_id: number;
-  status: SuggestionStatus;
+  title: string | null;
+  summary: string | null;
+}
+
+/** 글쓰기 제안 (B: Suggestion). 준비된(ready) 제안만 온다 */
+export interface Suggestion {
+  id: Uuid;
+  topic: TopicRef;
   title: string;
+  /** 소재를 엮는 방식 한 문장 (목록 20번). N120·N140에서 읽기 전용으로 보여 주고 글에 넘긴다 */
   direction: string;
   reason: string;
-  materials: { id: Uuid; title: string }[];
+  materials: SuggestionMaterial[];
+  computed_at: IsoTime;
+}
+
+/** GET /suggestions (B: SuggestionList) */
+export interface SuggestionList {
+  /** 하나라도 계산 중 → 홈 '소재를 정리하고 있어요' */
+  computing: boolean;
+  /** 최근에 만든 순 */
+  suggestions: Suggestion[];
+}
+
+/* ---------- 글 (N140 · L110 · L120) — B essays.py ---------- */
+
+/** B essays.py 제한 */
+export const ESSAY_RULES = {
+  titleMax: 100,
+  bodyMax: 20_000,
+  directionMax: 200,
+  materialsMax: 20,
+} as const;
+
+/** 글에 쓴 소재 (B: MaterialRef). 삭제된 소재는 deleted = true (누를 수 없음) */
+export interface MaterialRef {
+  id: Uuid;
+  title: string | null;
+  summary: string | null;
+  deleted: boolean;
+}
+
+/** 직접 쓰기 임시 저장 1개 (B: Draft) */
+export interface EssayDraft {
+  id: Uuid;
+  title: string | null;
+  body: string;
+  direction: string | null;
+  materials: MaterialRef[];
+  suggestion_id: Uuid | null;
+  updated_at: IsoTime;
+}
+
+/** 글의 버전 (B: Version). 초안 = 0, 그다음 v1 … */
+export interface Version {
+  id: Uuid;
+  version_no: number;
+  /** 초안 / v1 / v2 … */
+  label: string;
+  kind: "direct_first" | "direct_new" | "ai_first" | "ai_regen";
+  title: string | null;
+  body: string;
+  /** 본문만, 공백 포함, 제목 제외 */
+  char_count: number;
+  /** 감성적 / 담백함 (AI일 때) */
+  style: string | null;
+  length: "short" | "long" | null;
+  /** 고른 길이 범위 밖이면 false → 실제 글자 수를 보여 줌. 직접 쓴 글은 null */
+  in_length_range: boolean | null;
+  /** 몇 번째로 다시 만든 글인지 (0 = 다시 만들기 아님) */
+  regen_count: number;
+  created_at: IsoTime;
+  updated_at: IsoTime;
+}
+
+/** 글 상세 (B: Essay). versions: 초안 → v1 → … (마지막이 가장 최근) */
+export interface Essay {
+  id: Uuid;
+  method: "direct" | "ai";
+  title: string | null;
+  direction: string | null;
+  created_at: IsoTime;
+  updated_at: IsoTime;
+  materials: MaterialRef[];
+  versions: Version[];
+}
+
+/** 내 서재 카드 (B: EssayCard) */
+export interface EssayCard {
+  id: Uuid;
+  title: string | null;
+  method: "direct" | "ai";
+  /** 임시 저장 / 초안 / v2 … */
+  state: string;
+  is_draft: boolean;
+  updated_at: IsoTime;
+  material_count: number;
+}
+
+/** [임시 저장] (B: DraftIn). 소재는 고른 순서대로 */
+export interface SaveEssayDraftInput {
+  /** 이어 쓰는 임시 저장 id */
+  essay_id?: Uuid | null;
+  title?: string | null;
+  body: string;
+  direction?: string | null;
+  material_ids: Uuid[];
+  suggestion_id?: Uuid | null;
+}
+
+/** [저장] 첫 저장 → v1 (B: FirstSaveIn). save_token은 N140을 열 때 한 번 만들고 [다시 시도]에도 같은 값 */
+export interface SaveEssayInput extends SaveEssayDraftInput {
+  save_token: string;
 }
 
 /** 홈(H110) 한 번에 받기 */
 export interface HomeSummary {
   /** 최근 보관 확정 소재 3개 */
   recent_materials: Material[];
-  /** 보일 제안 카드. 없거나 실패면 null (카드 숨김) */
-  suggestion: SuggestionCard | null;
+  /** 보일 제안 카드. 없거나 실패면 null (카드 숨김). 홈을 B에 맞출 때 GET /suggestions로 바꾼다 */
+  suggestion: Suggestion | null;
   /** 분석 중이면 '소재를 정리하고 있어요' */
   is_organizing: boolean;
 }

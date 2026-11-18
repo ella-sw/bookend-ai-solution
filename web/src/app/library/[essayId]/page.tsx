@@ -25,7 +25,7 @@ async function Essay({ params }: Pick<PageProps<"/library/[essayId]">, "params">
         "더보기(L121) → 공유 창(L123): [복사] / [다른 앱으로 공유] (목록 13·15번 합의: share_method)",
       ]}
       links={[
-        { label: "다시 만들기 → 문체 선택", href: routes.draftOptions },
+        { label: "다시 만들기 → 문체 선택", href: routes.newAiStyle },
         { label: "사용한 소재 → 소재 상세", href: routes.material("sample") },
       ]}
     />
