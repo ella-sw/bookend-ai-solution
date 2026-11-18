@@ -137,8 +137,6 @@ export interface MockDb {
   candidates: Record<Uuid, MaterialCandidate>;
   suggestion: SuggestionCard | null;
   nextRequestId: number;
-  /** 첫 실행 동의 시각 (users.ai_consent_at). null이면 동의 전 → GET /me 404 */
-  consentAt: string | null;
   /** 중복 저장 막기: save_token → 저장된 기록 id (목록 17번 ⑨) */
   saveTokens: Record<string, Uuid>;
 }
@@ -206,7 +204,6 @@ function createDb(): MockDb {
       ],
     },
     nextRequestId: 1,
-    consentAt: null,
     saveTokens: {},
   };
 }

@@ -12,6 +12,7 @@ import {
   getMaterialsOverview,
   getQnaDraft,
   getTodayQuestions,
+  hasSession,
   newSaveToken,
   QNA_RESUME_WINDOW_MS,
   saveFreeRecord,
@@ -32,6 +33,7 @@ import {
   type MockScenario,
   type MockSettings,
 } from "@/lib/api/mock/scenario";
+import { clearMockSession } from "@/lib/api/mock/session";
 import { resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
@@ -162,6 +164,23 @@ export default function DevMockPage() {
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("내 정보", getMe)}>
               내 정보 (GET /me)
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running}
+              onClick={() => run("세션 확인", async () => ({ ok: true, data: { has_session: await hasSession() } }))}
+            >
+              세션 확인
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running}
+              onClick={() => {
+                clearMockSession();
+                setLog("목업 세션을 지웠어요 (첫 화면이면 O110)");
+              }}
+            >
+              목업 세션 지우기
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("홈", getHomeSummary)}>
               홈

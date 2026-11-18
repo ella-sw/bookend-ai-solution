@@ -19,6 +19,7 @@ import { QNA_RULES } from "../types";
 import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
+import { clearMockSession, getMockSession, setMockConsent, type MockSession } from "./session";
 import { clearUserData, FOLLOWUP_QUESTIONS, getDb, newId, now, topicId, type MockMessage } from "./store";
 
 /**
@@ -40,6 +41,8 @@ const MOCK_STATUS: Record<ApiErrorKind, number | undefined> = {
   timeout: undefined,
   network: undefined,
   server: 500,
+  unauthorized: 401,
+  not_consented: 403,
 };
 
 class MockHttpError extends Error {
@@ -327,19 +330,25 @@ function kstToday() {
   return new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
 }
 
+function toMe(session: MockSession): Me {
+  return { id: session.user_id, ai_consent_at: session.consented_at, last_seen_at: now(), data_cleared_at: null };
+}
+
 /* ---------- 처리 함수 (키별) ---------- */
 
 const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
+  // 동의 전이면 404 not_consented (B: GET /me)
   "me.get": (): Me => {
-    const db = getDb();
-    if (!db.consentAt) fail("not_found", "not_consented");
-    return { id: "mock-user", ai_consent_at: db.consentAt, last_seen_at: now(), data_cleared_at: null };
+    const session = getMockSession() ?? fail("unauthorized");
+    if (!session.consented_at) fail("not_found", "not_consented");
+    return toMe(session);
   },
 
+  // 처음 동의 시각은 다시 불러도 그대로 (B: on conflict do update set last_seen_at)
   "me.consent": (): Me => {
-    const db = getDb();
-    db.consentAt ??= now();
-    return { id: "mock-user", ai_consent_at: db.consentAt, last_seen_at: now(), data_cleared_at: null };
+    if (!getMockSession()) fail("unauthorized");
+    setMockConsent(now());
+    return toMe(getMockSession()!);
   },
 
   "home.get": ({ scenario }): HomeSummary => {
@@ -724,6 +733,16 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
       return { ok: false, error: apiError("server", detail?.status ?? 500, detail?.code) };
     }
     if (errorKind) return { ok: false, error: apiError(errorKind) };
+    // 세션 무효 흉내: client.ts처럼 세션을 지우고 unauthorized (새 토큰 받기도 거절된 경우)
+    if (scenario === "unauthorized") {
+      clearMockSession();
+      return { ok: false, error: apiError("unauthorized", 401) };
+    }
+    // 동의 전 흉내: 403 not_consented (GET /me는 B처럼 404). 세션은 남김
+    if (scenario === "not_consented") {
+      const status = key === "me.get" ? 404 : 403;
+      return { ok: false, error: apiError(key === "me.get" ? "not_found" : "not_consented", status, "not_consented") };
+    }
   } else if (scenario === "network") {
     return { ok: false, error: apiError("network") };
   }

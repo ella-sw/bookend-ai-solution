@@ -1,3 +1,4 @@
+import { getAccessToken, refreshAccessToken, type AuthFailure } from "./auth";
 import { API_BASE_URL, DEFAULT_TIMEOUT_MS, USE_MOCK } from "./config";
 import type { MockKey } from "./mock/keys";
 
@@ -5,9 +6,25 @@ import type { MockKey } from "./mock/keys";
  * 모든 API 호출이 지나가는 한 곳.
  * - 결과는 throw 대신 ApiResult로 돌려준다 → 화면에서 실패를 빠뜨리지 않고 처리하게
  * - 목업 모드(USE_MOCK)면 같은 요청을 mock/ 의 가짜 응답으로 보낸다. 화면 코드는 차이를 모른다.
+ * - 인증 (목록 19번, B server/app/auth.py): 모든 요청에 Authorization: Bearer <access_token>.
+ *   401이면 새 토큰을 받아 딱 1회 다시 보낸다. O110으로 보내는 건 화면이 한다 (kind로 판단).
+ * - 토큰·요청 본문은 콘솔에 남기지 않는다.
  */
 
-export type ApiErrorKind = "network" | "timeout" | "server" | "not_found" | "conflict" | "bad_request";
+/**
+ * - unauthorized: 세션 무효 → 세션은 이미 지워짐. 화면은 O110으로
+ * - not_consented: 동의 전 (403 not_consented, GET /me의 404 not_consented도 같게) → 세션은 남김. 화면은 O110으로
+ * - network: 연결 문제 (토큰 갱신 실패 포함). 세션은 남김 → '연결이 불안정해요' + [다시 시도]
+ */
+export type ApiErrorKind =
+  | "network"
+  | "timeout"
+  | "server"
+  | "not_found"
+  | "conflict"
+  | "bad_request"
+  | "unauthorized"
+  | "not_consented";
 
 /**
  * 서버(B FastAPI)가 응답 본문 detail에 넣어 주는 오류 코드. 같은 kind 안에서 상황을 나눌 때 쓴다.
@@ -16,6 +33,7 @@ export type ApiErrorKind = "network" | "timeout" | "server" | "not_found" | "con
  *   record_not_found, not_consented(GET /me: 동의 전 → O110)
  * - 409 conflict: finished(답변 7개), not_pending_question(답을 기다리는 질문이 아님), first_question_not_replaceable,
  *   replace_limit(6회), not_draft, not_active, need_more_answers(답변 2개 전 저장)
+ * - 403 not_consented: 동의 전 (B db.require_consent)
  * - 422 bad_request: invalid_daily_question, empty_body
  * - 502 server: ai_failed (오늘의 질문 만들기 실패)
  * 모르는 코드도 그대로 받는다 (서버가 코드를 늘려도 화면이 깨지지 않게).
@@ -69,6 +87,8 @@ export const errorMessages: Record<ApiErrorKind, string> = {
   not_found: "찾을 수 없어요",
   conflict: "이미 처리됐어요",
   bad_request: "입력을 확인해 주세요",
+  unauthorized: "처음 화면에서 다시 시작해 주세요",
+  not_consented: "시작하려면 안내에 동의해 주세요",
 };
 
 export function apiError(kind: ApiErrorKind, status?: number, code?: ApiErrorCode): ApiError {
@@ -100,7 +120,8 @@ export function readErrorCode(text: string): ApiErrorCode | undefined {
   return pick(b.code) ?? codeOf(b.detail) ?? pick(b.detail) ?? codeOf(b.error);
 }
 
-function kindFromStatus(status: number): ApiErrorKind {
+function kindFromStatus(status: number, code?: ApiErrorCode): ApiErrorKind {
+  if (code === "not_consented") return "not_consented";
   if (status === 404) return "not_found";
   if (status === 409) return "conflict";
   if (status === 408 || status === 504) return "timeout";
@@ -118,12 +139,38 @@ function buildUrl(path: string, query?: RequestOptions["query"]) {
   return `${API_BASE_URL}${path}${qs ? `?${qs}` : ""}`;
 }
 
-/**
- * 로그인 정보 헤더. 익명 사용자 방식(Supabase 익명 로그인 토큰을 넘길지 등)은
- * 목록 16번(서버 구조) 합의 뒤 여기만 채운다.
- */
-async function authHeaders(): Promise<Record<string, string>> {
-  return {};
+/** 로그인 정보 헤더 (B: HTTPBearer) */
+function authHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function authError(reason: AuthFailure): ApiError {
+  return apiError(reason, reason === "unauthorized" ? 401 : undefined);
+}
+
+type SendResult = { ok: true; status: number; text: string } | { ok: false; error: ApiError };
+
+/** 한 번 보내기. 시간 제한은 보낼 때마다 따로 센다 */
+async function send(options: RequestOptions, body: string | undefined, token: string): Promise<SendResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  try {
+    const res = await fetch(buildUrl(options.path, options.query), {
+      method: options.method,
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...authHeaders(token),
+      },
+      body,
+      signal: controller.signal,
+    });
+    // 본문까지 받은 뒤 시간 제한을 푼다 (본문을 받다 끊기면 연결 문제)
+    return { ok: true, status: res.status, text: await res.text() };
+  } catch {
+    return { ok: false, error: apiError(controller.signal.aborted ? "timeout" : "network") };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function request<T>(options: RequestOptions): Promise<ApiResult<T>> {
@@ -132,32 +179,34 @@ export async function request<T>(options: RequestOptions): Promise<ApiResult<T>>
     return runMock<T>(options);
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
 
-  try {
-    const res = await fetch(buildUrl(options.path, options.query), {
-      method: options.method,
-      headers: {
-        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(await authHeaders()),
-      },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-      signal: controller.signal,
-    });
+  const auth = await getAccessToken();
+  if (!auth.ok) return { ok: false, error: authError(auth.reason) };
+  // 세션이 없으면 서버를 부르지 않는다 (화면이 O110으로)
+  if (!auth.token) return { ok: false, error: authError("unauthorized") };
 
-    if (!res.ok) {
-      const code = readErrorCode(await res.text().catch(() => ""));
-      return { ok: false, error: apiError(kindFromStatus(res.status), res.status, code) };
-    }
+  let sent = await send(options, body, auth.token);
+  if (!sent.ok) return sent;
 
-    const text = await res.text();
-    return parseJson<T>(text, res.status);
-  } catch {
-    return { ok: false, error: apiError(controller.signal.aborted ? "timeout" : "network") };
-  } finally {
-    clearTimeout(timer);
+  // 401: 새 토큰을 받아 1회만 다시 보낸다 (같은 요청은 최대 2번)
+  if (sent.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (!refreshed.ok) return { ok: false, error: authError(refreshed.reason) };
+    if (!refreshed.token) return { ok: false, error: authError("unauthorized") };
+    sent = await send(options, body, refreshed.token);
+    if (!sent.ok) return sent;
+    // 새 토큰도 거절: Supabase는 세션이 유효하다고 했으므로 서버 쪽 문제로 본다.
+    // 세션을 지우면 기록에 다시 못 들어가므로 지우지 않고 '잠시 후 다시 시도'
+    if (sent.status === 401) return { ok: false, error: apiError("server", 401) };
   }
+
+  const { status, text } = sent;
+  if (status < 200 || status >= 300) {
+    const code = readErrorCode(text);
+    return { ok: false, error: apiError(kindFromStatus(status, code), status, code) };
+  }
+  return parseJson<T>(text, status);
 }
 
 /** 응답 본문 읽기. 서버가 JSON이 아닌 걸 보내면 '연결 문제'가 아니라 '서버 오류'로 알린다 */
