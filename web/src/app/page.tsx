@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import EntryGate from "@/components/layout/EntryGate";
-import { BottomSheet } from "@/components/ui/BottomSheet";
+import { CollectSheet } from "@/components/home/CollectSheet";
 import { Button, ButtonLink } from "@/components/ui/Button";
 import { USE_MOCK } from "@/lib/api/config";
 import { routes } from "@/lib/routes";
@@ -11,10 +11,9 @@ import { routes } from "@/lib/routes";
 /**
  * H110 홈 (0단계: 최소 화면)
  * - 들어오기 전에 EntryGate가 세션·동의를 확인한다 (목록 19번). 확인 전에는 홈을 그리지 않음
- * - [소재 모으기] → 방식 선택(H120, 아래 시트) → W110 / W210
+ * - [소재 모으기] → 방식 선택(H120, 아래 시트) → W110 / W210, 임시 저장이 있으면 이어 쓰기 확인(H121)
  * - [새 글 쓰기] → 소재 고르기(N110)
  * - 글쓰기 제안 카드·최근 소재는 실제 데이터 연결 때(6단계) 추가. 지금은 빈 상태만.
- * - 이어 쓰기 확인(H121)은 W110 목업 때 추가
  */
 export default function HomePage() {
   return (
@@ -79,23 +78,8 @@ function Home() {
         </div>
       </section>
 
-      {/* H120 소재 모으기 방식 선택 */}
-      <BottomSheet open={collectOpen} onClose={() => setCollectOpen(false)} title="어떻게 모아볼까요?">
-        {({ closeAndGo }) => (
-          <div className="flex flex-col gap-2">
-            <CollectOption
-              title="자유롭게 기록하기"
-              description="떠오른 일을 내가 직접 적어요"
-              onClick={() => closeAndGo(routes.collectFree)}
-            />
-            <CollectOption
-              title="AI 질문에 답하기"
-              description="AI 질문에 답하며 기억을 꺼내요"
-              onClick={() => closeAndGo(routes.collectAi)}
-            />
-          </div>
-        )}
-      </BottomSheet>
+      {/* H120 소재 모으기 방식 선택 + H121 이어 쓰기 확인 */}
+      <CollectSheet open={collectOpen} onClose={() => setCollectOpen(false)} />
 
       {(process.env.NODE_ENV !== "production" || USE_MOCK) && (
         <div className="mt-auto px-5 pt-10 pb-4">
@@ -105,23 +89,5 @@ function Home() {
         </div>
       )}
     </>
-  );
-}
-
-function CollectOption({ title, description, onClick }: { title: string; description: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center justify-between rounded-2xl border border-line px-4 py-4 text-left active:bg-subtle"
-    >
-      <span>
-        <span className="block text-[15px] font-semibold">{title}</span>
-        <span className="text-sm text-ink-mute">{description}</span>
-      </span>
-      <span aria-hidden className="text-ink-mute">
-        ›
-      </span>
-    </button>
   );
 }

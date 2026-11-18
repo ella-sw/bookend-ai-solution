@@ -82,6 +82,14 @@ export default function DevMockPage() {
       return saveQnaDraft(started.data.record_id);
     });
 
+  /** 첫 답변만 (active 만들기) → H120 [AI 질문에 답하기]가 H121 없이 W210으로 가는지 확인용 */
+  const qnaActiveFlow = () =>
+    run("첫 답변 (진행 중 대화)", async () => {
+      const questions = await getTodayQuestions();
+      if (!questions.ok) return questions;
+      return startQna({ daily_question_id: questions.data.questions[0].id, answer: "시험 답변이에요." });
+    });
+
   return (
     <>
       <ScreenHeader title="목업 API (개발용)" back />
@@ -220,6 +228,9 @@ ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at 
           </Button>
           <Button variant="secondary" block disabled={running} onClick={qnaDraftFlow}>
             첫 답변 → 임시 저장 (W210 흐름)
+          </Button>
+          <Button variant="secondary" block disabled={running} onClick={qnaActiveFlow}>
+            첫 답변만 (AI 진행 중 대화 만들기)
           </Button>
           <Button
             variant="ghost"
