@@ -187,23 +187,39 @@ def generate_draft(req: DraftRequest):
 # [피드백 ③ 반영] feedback 입력칸 제거, '처음 고른 소재'를 파라미터로 받음
 # ==========================================
 class RetouchRequest(BaseModel):
-    original_draft: str        # 기존에 생성되었던 초안 내용
-    selected_materials: list   # 피드백 대신, 처음 고른 소재 리스트를 받음
+    current_draft: str          # 사용자가 화면에서 직접 수정한 에세이 본문
+    selected_materials: str     # 처음 고른 소재
+    tone: str                   # 예: "담담한", "감성적인"
+    length: str                 # 예: "짧게", "원래 길이 유지", "길게"
 
 @app.post("/api/essay/retouch")
 def retouch_draft(req: RetouchRequest):
     system_prompt = """
     당신은 에세이 전문 교정 편집자입니다.
-    사용자가 작성한 '기존 초안'과 글의 뼈대가 되는 '처음 고른 소재'를 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
+    사용자가 '직접 수정한 초안(current_draft)'을 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
     
+    [수정 지침]
+    1. 사용자가 직접 수정한 문장과 흐름, 의도를 최대한 보존하세요.
+    2. 사용자가 요청한 '문체(Tone)'와 '길이(Length)'에 맞춰 글을 매끄럽게 교정하세요.
+    3. '처음 고른 소재'에 없는 새로운 사실을 임의로 지어내지 마세요.
+
     [절대 규칙]
-    1. 반드시 아래 JSON 형식으로만 응답할 것.
+    반드시 아래 JSON 형식으로만 응답할 것.
     {
         "retouched_content": "수정된 에세이 본문"
     }
-    2. 처음 고른 소재에 없는 지어낸 사실을 추가하지 말고, 전체적인 문맥이 어색해지지 않게 다듬을 것.
     """
-    user_prompt = f"- 기존 초안:\n{req.original_draft}\n- 처음 고른 소재:\n{req.selected_materials}"
+    
+    user_prompt = f"""- 사용자가 수정한 현재 초안:
+{req.current_draft}
+
+- 처음 고른 소재:
+{req.selected_materials}
+
+- 적용할 문체: {req.tone}
+- 목표 길이: {req.length}
+"""
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -213,6 +229,7 @@ def retouch_draft(req: RetouchRequest):
         response_format={"type": "json_object"},
         # temperature=0.7 
     )
+    import json
     return json.loads(response.choices[0].message.content)
 
 # ==========================================
