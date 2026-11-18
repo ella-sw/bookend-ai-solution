@@ -7,10 +7,12 @@ import type {
   HomeSummary,
   Material,
   MaterialDetail,
-  MaterialsOverview,
+  EditMaterialInput,
+  MaterialBox,
+  MaterialCard,
   Original,
+  RecordCard,
   Me,
-  PendingCardStatus,
   QnaMessage,
   QnaState,
   RecordItem,
@@ -21,7 +23,17 @@ import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
 import { clearMockSession, getMockSession, setMockConsent, type MockSession } from "./session";
-import { clearUserData, FOLLOWUP_QUESTIONS, getDb, newId, now, topicId, type MockMessage } from "./store";
+import {
+  clearUserData,
+  FOLLOWUP_QUESTIONS,
+  getDb,
+  MOCK_ESSAYS,
+  newId,
+  now,
+  topicId,
+  type MockMessage,
+  type MockReanalysis,
+} from "./store";
 
 /**
  * 목업 응답. 모양·오류 코드는 B 서버(feat/backend-setup server/app/routers/*.py)와 같게 맞춘다.
@@ -74,10 +86,6 @@ function findOpenQna(id: string): RecordItem {
     (r) => r.id === id && r.type === "qna" && (r.status === "active" || r.status === "draft"),
   );
   return record ?? fail("not_found", "conversation_not_found");
-}
-
-function hasConfirmedMaterial(recordId: string) {
-  return getDb().materials.some((m) => m.record_id === recordId && m.confirmed_at && !m.deleted_at);
 }
 
 /** 이 기록의 문답 행 전부 (바꾼 질문 포함), seq 순 */
@@ -209,20 +217,79 @@ function generateQuestion(record: RecordItem, scenario: MockScenario, replaceOf?
   return "ok";
 }
 
-function cardStatus(record: RecordItem): PendingCardStatus | null {
-  switch (record.analysis_status) {
-    case "analyzing":
-      return "analyzing";
-    case "done":
-      return "review";
-    case "empty":
-      return "empty";
-    case "failed":
-      return "failed";
-    default:
-      return null;
+/** 소재함 기록 카드 (B: RecordCard). preview = 본문 또는 답변 앞 80자 */
+function recordCard(record: RecordItem, label: RecordCard["label"]): RecordCard {
+  return {
+    record_id: record.id,
+    record_type: record.type,
+    title: record.title,
+    preview: sourceText(record).slice(0, 80),
+    status: record.status === "draft" ? "draft" : "saved",
+    analysis_status: record.analysis_status,
+    label,
+    date: record.status === "saved" ? (record.saved_at ?? record.updated_at) : record.updated_at,
+  };
+}
+
+/**
+ * 보관한 소재의 다시 분석 결과를 낸다 (목업 전용). 결과는 '다시 분석 결과 (M131)' 상황으로 고른다
+ * - 정상: 2~4번째 조회에서 done / 빈 결과: empty / 실패: failed / 시간 초과: 60초 뒤 failed
+ */
+function settleReanalysis(material: Material, re: MockReanalysis) {
+  if (re.status !== "analyzing") return;
+  const scenario = scenarioFor("material.reanalysis.result");
+  if (Date.now() - re.startedAt >= ANALYSIS_TIMEOUT_MS) {
+    re.status = "failed";
+    return;
+  }
+  if (scenario === "timeout" || re.polls < re.pollsNeeded) return;
+  if (scenario === "empty") re.status = "empty";
+  else if (scenario === "fail") re.status = "failed";
+  else {
+    const record = getDb().records.find((r) => r.id === material.record_id);
+    const text = record ? sourceText(record).trim() : "";
+    const sentences = text.split(/(?<=[.!?。])\s+/).filter(Boolean);
+    const evidence = sentences[sentences.length - 1] ?? text;
+    re.status = "done";
+    re.result = {
+      title: material.title,
+      summary: `${evidence.slice(0, 40)} (다시 찾은 소재)`,
+      evidence,
+      keywords: Array.from(new Set(text.split(/\s+/).filter((w) => w.length >= 2))).slice(-3),
+      topics: topicRefs([topicId("일상"), topicId("나·성장")]),
+    };
   }
 }
+
+/** 보관한 소재만 (확정됨·삭제 안 함). 없으면 404 material_not_found (B: _live_material) */
+function liveMaterial(id: string): Material {
+  const m = getDb().materials.find((x) => x.id === id && x.confirmed_at && !x.deleted_at);
+  return m ?? fail("not_found", "material_not_found");
+}
+
+/** B EditIn 검사: 보낸 칸만 (규칙은 ConfirmIn과 같음) */
+function checkEditInput(body: unknown) {
+  const input = (body ?? {}) as EditMaterialInput;
+  const out: { summary?: string; keywords?: string[]; topics?: number[] } = {};
+  if (input.summary !== undefined) {
+    const summary = String(input.summary).trim();
+    if (summary.length < 1 || summary.length > MATERIAL_RULES.summaryMax) fail("bad_request");
+    out.summary = summary;
+  }
+  if (input.keywords !== undefined) {
+    const keywords = input.keywords.map((k) => String(k).trim());
+    if (keywords.length > MATERIAL_RULES.keywordsMax) fail("bad_request");
+    if (keywords.some((k) => k.length < 1 || k.length > MATERIAL_RULES.keywordMax)) fail("bad_request");
+    out.keywords = Array.from(new Set(keywords));
+  }
+  if (input.topics !== undefined) {
+    if (input.topics.length < 1 || input.topics.length > MATERIAL_RULES.topicsMax) fail("bad_request");
+    if (input.topics.some((id) => !TOPICS.some((t) => t.id === id))) fail("bad_request", "unknown_topic");
+    out.topics = Array.from(new Set(input.topics)).sort((x, y) => x - y);
+  }
+  return out;
+}
+
 
 /**
  * 분석 중인 기록의 결과를 낸다 (목업 전용). 상황은 analysis.get 키로 고른다
@@ -348,6 +415,13 @@ function originalOf(record: RecordItem): Original {
   };
 }
 
+/** B materials.py: _reanalysis — 진행 중이거나, 아직 [바꾸기]·[그대로 두기]를 하지 않은 결과 */
+function reanalysisOf(materialId: string): MaterialDetail["reanalysis"] {
+  const re = getDb().reanalyses[materialId];
+  if (!re) return null;
+  return { status: re.status, result: re.status === "done" ? re.result : null };
+}
+
 /** B materials.py: _detail */
 function materialDetail(m: Material): MaterialDetail {
   const record = findSavedRecord(m.record_id);
@@ -363,8 +437,8 @@ function materialDetail(m: Material): MaterialDetail {
     user_edited_at: m.user_edited_at,
     created_at: m.created_at,
     original: originalOf(record),
-    essays: m.used_count > 0 ? [{ id: "essay-sample-1", title: "멀리 있어 더 또렷해진 것들" }] : [],
-    reanalysis: null,
+    essays: MOCK_ESSAYS.slice(0, m.used_count),
+    reanalysis: reanalysisOf(m.id),
   };
 }
 
@@ -841,37 +915,123 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return materialDetail(existing);
   },
 
-  "materials.list": ({ scenario }): MaterialsOverview => {
-    if (scenario === "empty") return { pending: [], drafts: [], kept: [], raw_only: [] };
+  // M110 (B materials.py material_box)
+  "materials.list": ({ scenario }): MaterialBox => {
+    if (scenario === "empty") return { pending: [], drafts: [], materials: [], kept_originals: [] };
     const db = getDb();
     const analysisScenario = scenarioFor("analysis.get");
     db.records.forEach((r) => settleAnalysis(r, analysisScenario));
 
-    const saved = db.records.filter((r) => r.status === "saved" && !hasConfirmedMaterial(r.id));
+    const hasCandidate = (id: string) => db.materials.some((m) => m.record_id === id && !m.confirmed_at);
+    // 보관 확정한 적이 있으면 (삭제했어도) 목록에 나오지 않는다 (목록 22번)
+    const noConfirmed = (id: string) => !db.materials.some((m) => m.record_id === id && m.confirmed_at);
+    const saved = db.records.filter((r) => r.status === "saved" && noConfirmed(r.id));
+    const bySavedDesc = (a: RecordItem, b: RecordItem) => (b.saved_at ?? "").localeCompare(a.saved_at ?? "");
+
     return {
-      // ERD 규칙 4: 원본만 보관 아님 + 보관 확정 소재 없음 + 분석 중·후보·소재 없음·실패
       pending: saved
-        .filter((r) => !r.original_kept_at && cardStatus(r))
-        .map((record) => ({ record, card_status: cardStatus(record)! })),
-      // 임시 저장만. 진행 중(active) 문답은 넣지 않음 (목록 17번)
-      drafts: db.records.filter((r) => r.status === "draft"),
-      kept: db.materials
+        .filter((r) => !r.original_kept_at && ["analyzing", "done", "empty", "failed"].includes(r.analysis_status))
+        .sort(bySavedDesc)
+        .map((r) =>
+          recordCard(
+            r,
+            r.analysis_status === "analyzing" ? "analyzing" : hasCandidate(r.id) ? "to_confirm" : r.analysis_status === "empty" ? "empty" : "failed",
+          ),
+        ),
+      drafts: db.records
+        .filter((r) => r.status === "draft")
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .map((r) => recordCard(r, null)),
+      materials: db.materials
         .filter((m) => m.confirmed_at && !m.deleted_at)
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-      // ERD 규칙 5: 다시 분석 중이면 '분석 중', 결과 미확인이면 '확인해 주세요'
-      raw_only: saved
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .map(
+          (m): MaterialCard => ({
+            id: m.id,
+            record_id: m.record_id,
+            title: m.title,
+            summary: m.summary,
+            topics: topicRefs(m.topic_ids),
+            created_at: m.created_at,
+            essay_count: m.used_count,
+          }),
+        ),
+      kept_originals: saved
         .filter((r) => r.original_kept_at)
-        .map((record) => {
-          const status = cardStatus(record);
-          return { record, card_status: status === "analyzing" || status === "review" ? status : null };
-        }),
+        .sort((a, b) => (b.original_kept_at ?? "").localeCompare(a.original_kept_at ?? ""))
+        .map((r) => recordCard(r, r.analysis_status === "analyzing" ? "analyzing" : hasCandidate(r.id) ? "to_confirm" : null)),
     };
   },
 
+  // M130 (B materials.py material_detail). 다시 분석 중이면 부를 때마다 조회 횟수를 센다 (목업)
   "material.get": ({ params }): MaterialDetail => {
-    const material = getDb().materials.find((m) => m.id === params.materialId && m.confirmed_at && !m.deleted_at);
-    return materialDetail(material ?? fail("not_found", "material_not_found"));
+    const material = liveMaterial(params.materialId);
+    const re = getDb().reanalyses[material.id];
+    if (re?.status === "analyzing") {
+      re.polls += 1;
+      settleReanalysis(material, re);
+    }
+    return materialDetail(material);
   },
+
+  // M131 소재 정보 고치기: 요약·키워드·주제만, 보낸 칸만
+  "material.edit": ({ params, body }): MaterialDetail => {
+    const material = liveMaterial(params.materialId);
+    const input = checkEditInput(body);
+    if (input.summary !== undefined) material.summary = input.summary;
+    if (input.keywords !== undefined) material.keywords = input.keywords;
+    if (input.topics !== undefined) material.topic_ids = input.topics;
+    if (Object.keys(input).length > 0) material.user_edited_at = now();
+    return materialDetail(material);
+  },
+
+  // M131 다시 분석: 소재는 그대로, 결과는 reanalysis에. 이미 분석 중이면 그대로 (200). 이전 결과는 버림
+  "material.reanalyze": ({ params, scenario }): MaterialDetail => {
+    const db = getDb();
+    const material = liveMaterial(params.materialId);
+    if (db.reanalyses[material.id]?.status === "analyzing") return materialDetail(material);
+    if (scenario === "daily_limit" || analysisLimitReached()) fail("bad_request", "daily_limit", 429);
+    db.reanalyses[material.id] = { status: "analyzing", startedAt: Date.now(), polls: 0, pollsNeeded: randomPollsNeeded(), result: null };
+    return materialDetail(material);
+  },
+
+  // [바꾸기]: 결과로 소재 정보를 바꾼다 (origin = ai). 결과가 없으면 409 no_result
+  "material.reanalysis.apply": ({ params }): MaterialDetail => {
+    const db = getDb();
+    const material = liveMaterial(params.materialId);
+    const re = db.reanalyses[material.id];
+    if (!re || re.status !== "done" || !re.result) fail("conflict", "no_result");
+    const result = re!.result!;
+    Object.assign(material, {
+      title: result.title,
+      summary: result.summary,
+      evidence: result.evidence,
+      keywords: result.keywords,
+      topic_ids: result.topics.map((t) => t.id),
+      origin: "ai",
+    });
+    delete db.reanalyses[material.id]; // ERD 규칙 12: 저장하면 AI 결과를 비운다
+    return materialDetail(material);
+  },
+
+  // [그대로 두기] · 소재 없음·실패 안내의 [확인]: 진행 중이 아니면 결과를 비운다
+  "material.reanalysis.dismiss": ({ params }): MaterialDetail => {
+    const db = getDb();
+    const material = liveMaterial(params.materialId);
+    if (db.reanalyses[material.id] && db.reanalyses[material.id].status !== "analyzing") delete db.reanalyses[material.id];
+    return materialDetail(material);
+  },
+
+  // M131 소재 삭제: 논리 삭제 (204). 원본 기록과 쓴 글은 남는다
+  "material.delete": ({ params }) => {
+    const material = liveMaterial(params.materialId);
+    material.deleted_at = now();
+    delete getDb().reanalyses[material.id];
+    return null;
+  },
+
+  // 목업 전용 (요청 없음): '다시 분석 결과 (M131)' 상황을 고르는 자리
+  "material.reanalysis.result": () => null,
 
   "settings.clear": () => {
     clearUserData();

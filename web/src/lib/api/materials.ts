@@ -1,6 +1,13 @@
 import { ANALYSIS_POLL_MS, ANALYSIS_WAIT_MS } from "./config";
 import { request, type ApiResult } from "./client";
-import type { AnalysisState, ConfirmMaterialInput, MaterialDetail, MaterialsOverview, Original } from "./types";
+import type {
+  AnalysisState,
+  ConfirmMaterialInput,
+  EditMaterialInput,
+  MaterialBox,
+  MaterialDetail,
+  Original,
+} from "./types";
 
 /* ---------- 소재 분석 (M120) — B routers/analysis.py ---------- */
 
@@ -91,18 +98,74 @@ export function getOriginal(recordId: string) {
   });
 }
 
-/* ---------- 소재함 (M110) · 소재 상세 (M130) ---------- */
+/* ---------- 소재함 (M110) · 소재 상세 (M130) · 더보기 (M131) — B routers/materials.py ---------- */
 
-/** 확인 대기 · 임시 저장 · 보관한 소재 · 원본만 보관을 한 번에 (A 임시안 — M110 개발 때 B MaterialBox로) */
-export function getMaterialsOverview() {
-  return request<MaterialsOverview>({ method: "GET", path: "/materials", mock: { key: "materials.list" } });
+/** M110: 확인 대기 · 임시 저장 기록 · 보관한 소재 · 원본만 보관한 기록 */
+export function getMaterialBox() {
+  return request<MaterialBox>({ method: "GET", path: "/materials", mock: { key: "materials.list" } });
 }
 
-/** 보관한 소재 상세. 404 material_not_found (삭제했거나 보관 전) */
+/**
+ * M130 소재 상세: 소재 정보, 원문, 사용한 글, 다시 분석 진행·결과(reanalysis).
+ * 404 material_not_found (삭제했거나 보관 전)
+ */
 export function getMaterial(materialId: string) {
   return request<MaterialDetail>({
     method: "GET",
     path: `/materials/${materialId}`,
     mock: { key: "material.get", params: { materialId } },
+  });
+}
+
+/** M131 소재 정보 고치기: 요약·키워드·주제만, 바뀐 칸만 보낸다 (제목·원본은 그대로) */
+export function editMaterial(materialId: string, input: EditMaterialInput) {
+  return request<MaterialDetail>({
+    method: "PATCH",
+    path: `/materials/${materialId}`,
+    body: input,
+    mock: { key: "material.edit", params: { materialId } },
+  });
+}
+
+/**
+ * M131 다시 분석: 같은 원본으로 다시 추출. 소재는 바뀌지 않고 결과가 reanalysis에 나란히 온다
+ * → [바꾸기] applyReanalysis / [그대로 두기] dismissReanalysis. 202, 이미 분석 중이면 200.
+ * 오류: 429 daily_limit, 404 material_not_found
+ */
+export function reanalyzeMaterial(materialId: string) {
+  return request<MaterialDetail>({
+    method: "POST",
+    path: `/materials/${materialId}/reanalyze`,
+    mock: { key: "material.reanalyze", params: { materialId } },
+  });
+}
+
+/** [바꾸기]: 다시 분석한 결과로 소재 정보를 바꾼다. 결과가 없으면 409 no_result */
+export function applyReanalysis(materialId: string) {
+  return request<MaterialDetail>({
+    method: "POST",
+    path: `/materials/${materialId}/reanalysis/apply`,
+    mock: { key: "material.reanalysis.apply", params: { materialId } },
+  });
+}
+
+/** [그대로 두기] (소재 없음·실패 안내의 [확인]도): 소재를 그대로 두고 결과를 비운다 */
+export function dismissReanalysis(materialId: string) {
+  return request<MaterialDetail>({
+    method: "POST",
+    path: `/materials/${materialId}/reanalysis/dismiss`,
+    mock: { key: "material.reanalysis.dismiss", params: { materialId } },
+  });
+}
+
+/**
+ * M131 소재 삭제 (204): 논리 삭제. 원본 기록과 이미 쓴 글은 남는다 (목록 22번).
+ * 그 원본은 소재함 목록에 다시 나오지 않는다
+ */
+export function deleteMaterial(materialId: string) {
+  return request<null>({
+    method: "DELETE",
+    path: `/materials/${materialId}`,
+    mock: { key: "material.delete", params: { materialId } },
   });
 }

@@ -245,8 +245,8 @@ export interface ConfirmMaterialInput {
 }
 
 /**
- * 소재함·홈 목업이 쓰는 소재 모양 (A 임시안).
- * M110·H110을 B(GET /materials의 MaterialCard)에 맞출 때 바꾼다.
+ * 목업 DB의 소재 행 + 홈(H110) 목업이 쓰는 모양 (A 임시안).
+ * 홈을 B에 맞출 때 바꾼다. 소재함은 MaterialBox·MaterialCard를 쓴다.
  */
 export interface Material {
   id: Uuid;
@@ -265,19 +265,62 @@ export interface Material {
   used_count: number;
 }
 
-/** 소재함 카드 상태 (components/ui/MaterialCard와 같은 이름) */
-export type PendingCardStatus = "review" | "analyzing" | "empty" | "failed";
+/* ---------- 소재함 (M110) — B materials.py material_box ---------- */
 
-/** 소재함(M110) 한 번에 받기 */
-export interface MaterialsOverview {
-  /** 확인 대기 (ERD 규칙 4) */
-  pending: { record: RecordItem; card_status: PendingCardStatus }[];
-  /** 임시 저장 기록 (방식별 1개). 진행 중(active)은 넣지 않음 */
-  drafts: RecordItem[];
-  /** 보관 확정 소재 */
-  kept: Material[];
-  /** 원본만 보관한 기록 (ERD 규칙 5). 다시 분석 중이면 card_status가 붙음 */
-  raw_only: { record: RecordItem; card_status: PendingCardStatus | null }[];
+/**
+ * 기록 카드의 표시 (B: RecordCard.label)
+ * - 확인 대기: analyzing '분석 중' / to_confirm '확인해 주세요' / empty '소재 없음' / failed '분석 실패'
+ * - 원본만 보관: analyzing / to_confirm / null('원본만 보관')
+ * - 임시 저장: 항상 null
+ */
+export type RecordCardLabel = "analyzing" | "to_confirm" | "empty" | "failed" | null;
+
+/** 소재함의 기록 카드 (확인 대기 · 임시 저장 · 원본만 보관, B: RecordCard) */
+export interface RecordCard {
+  record_id: Uuid;
+  record_type: RecordType;
+  title: string | null;
+  /** 본문(또는 답변) 앞 80자 */
+  preview: string;
+  status: "draft" | "saved";
+  analysis_status: AnalysisStatus;
+  label: RecordCardLabel;
+  /** 저장한 날(saved_at), 임시 저장은 마지막 수정(updated_at) */
+  date: IsoTime;
+}
+
+/** 보관한 소재 카드 (B: MaterialCard) */
+export interface MaterialCard {
+  id: Uuid;
+  record_id: Uuid;
+  title: string | null;
+  summary: string | null;
+  topics: TopicRef[];
+  created_at: IsoTime;
+  /** '글 N편에 사용' */
+  essay_count: number;
+}
+
+/** GET /materials (B: MaterialBox). 주제 칩으로 거르기는 화면이 topics로 한다 */
+export interface MaterialBox {
+  /** 확인 대기 (맨 위) */
+  pending: RecordCard[];
+  /** 임시 저장 기록 (맨 위) */
+  drafts: RecordCard[];
+  /** 보관한 소재 (최근 순) */
+  materials: MaterialCard[];
+  /** 원본만 보관한 기록 (맨 아래 접힌 구역) */
+  kept_originals: RecordCard[];
+}
+
+/**
+ * M131 소재 정보 고치기 (B: EditIn). 바뀐 칸만 보낸다. 제목은 고칠 수 없다.
+ * 규칙은 ConfirmMaterialInput과 같다 (요약 1~200자, 키워드 10개·각 30자, 주제 1~10개)
+ */
+export interface EditMaterialInput {
+  summary?: string;
+  keywords?: string[];
+  topics?: number[];
 }
 
 /* ---------- 글쓰기 제안 ---------- */

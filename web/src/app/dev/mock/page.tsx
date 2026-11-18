@@ -9,7 +9,7 @@ import {
   getActiveQna,
   getFreeDraft,
   getMe,
-  getMaterialsOverview,
+  getMaterialBox,
   getQnaDraft,
   getTodayQuestions,
   hasSession,
@@ -34,7 +34,7 @@ import {
   type MockSettings,
 } from "@/lib/api/mock/scenario";
 import { clearMockSession, startMockConsentedUser } from "@/lib/api/mock/session";
-import { resetDb } from "@/lib/api/mock/store";
+import { fillMaterialBox, resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
 export default function DevMockPage() {
@@ -184,6 +184,16 @@ export default function DevMockPage() {
               variant="secondary"
               disabled={running || !USE_MOCK}
               onClick={() => {
+                fillMaterialBox();
+                setLog("소재함 데이터를 채웠어요 (확인 대기 4 · 임시 저장 2 · 보관한 소재 3 · 원본만 보관 3). 기록·소재는 이 데이터로 바뀌었어요");
+              }}
+            >
+              소재함 데이터 채우기
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running || !USE_MOCK}
+              onClick={() => {
                 const session = startMockConsentedUser(new Date().toISOString());
                 setLog(`동의한 사용자로 시작했어요
 ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at }, null, 2)}`);
@@ -204,7 +214,7 @@ ${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at 
             <Button variant="secondary" disabled={running} onClick={() => run("홈", getHomeSummary)}>
               홈
             </Button>
-            <Button variant="secondary" disabled={running} onClick={() => run("소재함", getMaterialsOverview)}>
+            <Button variant="secondary" disabled={running} onClick={() => run("소재함", getMaterialBox)}>
               소재함
             </Button>
             <Button variant="secondary" disabled={running} onClick={() => run("자유 기록 임시 저장", getFreeDraft)}>

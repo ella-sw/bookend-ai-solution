@@ -30,6 +30,12 @@ export const MOCK_KEYS = {
   "material.confirm": "소재함에 보관 · 직접 정리하기 (M120)",
   "materials.list": "소재함 (M110)",
   "material.get": "소재 상세 (M130)",
+  "material.edit": "소재 정보 고치기 (M131)",
+  "material.reanalyze": "다시 분석 요청 (M131)",
+  "material.reanalysis.result": "다시 분석 결과 (M131, 목업 전용: 정상·빈 결과·실패·시간 초과)",
+  "material.reanalysis.apply": "다시 분석 [바꾸기] (M130)",
+  "material.reanalysis.dismiss": "다시 분석 [그대로 두기]·[확인] (M130)",
+  "material.delete": "소재 삭제 (M131)",
   "settings.clear": "모든 기록 지우기 (S120)",
   "events.log": "이벤트 기록",
 } as const;

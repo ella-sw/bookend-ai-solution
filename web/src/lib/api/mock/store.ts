@@ -1,4 +1,5 @@
 import type {
+  Candidate,
   DailyQuestion,
   Material,
   QnaMessage,
@@ -13,6 +14,12 @@ import { TOPIC_NAMES } from "../types";
  * 목업용 가짜 DB (브라우저 탭 메모리). 새로고침하면 처음 상태로 돌아간다.
  * 가짜 데이터는 여기에만 둔다 — 화면 코드에서 데이터를 만들지 않는다.
  */
+
+/** 목업 글 (사용한 글 목록용). 글 기능 목업은 아직 없음 */
+export const MOCK_ESSAYS: { id: Uuid; title: string | null }[] = [
+  { id: "essay-sample-1", title: "멀리 있어 더 또렷해진 것들" },
+  { id: "essay-sample-2", title: null },
+];
 
 export function newId(): Uuid {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -122,6 +129,15 @@ export interface MockDailyQuestion extends DailyQuestion {
   question_date: string;
 }
 
+/** 다시 분석 진행·결과 (목업: 조회 횟수로 끝냄, 60초가 지나면 failed) */
+export interface MockReanalysis {
+  status: "analyzing" | "done" | "empty" | "failed";
+  startedAt: number;
+  polls: number;
+  pollsNeeded: number;
+  result: Candidate | null;
+}
+
 export interface MockDb {
   topics: Topic[];
   dailyQuestions: MockDailyQuestion[];
@@ -139,6 +155,8 @@ export interface MockDb {
   suggestion: SuggestionCard | null;
   /** 저장한 글 id (essays). 이벤트 essay_id 확인용 — 글 기능 목업은 아직 없음 */
   essayIds: Uuid[];
+  /** 보관한 소재의 다시 분석 (M131, B: 소재를 확정한 뒤 시작한 최근 분석 요청). 소재 id → 진행·결과 */
+  reanalyses: Record<Uuid, MockReanalysis>;
   nextRequestId: number;
   /** 중복 저장 막기: save_token → 저장된 기록 id (목록 17번 ⑨) */
   saveTokens: Record<string, Uuid>;
@@ -205,7 +223,8 @@ function createDb(): MockDb {
         { id: "mat-sample-2", title: "퇴근길 노을" },
       ],
     },
-    essayIds: ["essay-sample-1"],
+    essayIds: MOCK_ESSAYS.map((e) => e.id),
+    reanalyses: {},
     nextRequestId: 1,
     saveTokens: {},
   };
@@ -237,6 +256,70 @@ export function clearUserData() {
   d.analyses = {};
   d.suggestion = null;
   d.essayIds = [];
+  d.reanalyses = {};
 }
 
 export { now };
+
+/**
+ * /dev/mock [소재함 데이터 채우기]: 소재함(M110)의 모든 구역을 한 번에 볼 수 있게 채운다 (기록·소재는 이것으로 바뀜).
+ * - 확인 대기 4: 확인해 주세요 · 분석 중 · 소재 없음 · 분석 실패
+ * - 임시 저장 2: 자유 기록 · AI 질문
+ * - 보관한 소재 3 (글 2편·0편·1편에 사용)
+ * - 원본만 보관 3: 표시 없음(실패였음) · 분석 중 · 확인해 주세요
+ */
+export function fillMaterialBox() {
+  clearUserData();
+  const d = getDb();
+  const ago = (n: number) => daysAgo(n);
+  const qnaMessages = (recordId: string, pairs: [string, string | null][]) =>
+    pairs.map(([question, answer], i) => ({
+      id: `${recordId}-m${i + 1}`,
+      record_id: recordId,
+      seq: i + 1,
+      question,
+      question_source: (i === 0 ? "daily" : "followup") as "daily" | "followup",
+      daily_question_id: null,
+      answer,
+      is_replaced: false,
+    }));
+
+  d.records = [
+    // 확인 대기
+    seedRecord({ id: "box-pending-review", type: "free", title: "이사 첫날", body: "짐을 다 풀지도 못한 채 바닥에 앉아 컵라면을 먹었다. 창밖으로 낯선 동네 불빛이 보였다.", created_at: ago(1), saved_at: ago(1) }),
+    seedRecord({ id: "box-pending-analyzing", type: "qna", analysis_status: "analyzing", created_at: ago(0), saved_at: ago(0) }),
+    seedRecord({ id: "box-pending-empty", type: "qna", analysis_status: "empty", created_at: ago(2), saved_at: ago(2) }),
+    seedRecord({ id: "box-pending-failed", type: "free", title: null, body: "회의가 끝나고 한참 창밖만 봤다. 아무 생각도 나지 않았다.", analysis_status: "failed", created_at: ago(3), saved_at: ago(3) }),
+    // 임시 저장
+    seedRecord({ id: "box-draft-free", type: "free", title: null, body: "오늘 아침에 버스를 놓쳤다", status: "draft", analysis_status: "none", saved_at: null, updated_at: minutesAgo(30) }),
+    seedRecord({ id: "box-draft-qna", type: "qna", status: "draft", analysis_status: "none", saved_at: null, updated_at: minutesAgo(20) }),
+    // 보관한 소재의 원본
+    seedRecord({ id: "box-kept-1", type: "free", title: "혼자 아팠던 날", body: "감기로 혼자 누워 있던 날, 엄마가 전화로 죽 끓이는 법을 알려 줬다. 평소엔 당연했던 게 그날따라 고마웠다.", created_at: ago(6), saved_at: ago(6) }),
+    seedRecord({ id: "box-kept-2", type: "free", title: "퇴근길 노을", body: "버스 창밖으로 본 노을이 유난히 붉었다. 작년에 엄마랑 같이 본 노을이 생각났다.", created_at: ago(8), saved_at: ago(8) }),
+    seedRecord({ id: "box-kept-3", type: "qna", created_at: ago(10), saved_at: ago(10) }),
+    // 원본만 보관
+    seedRecord({ id: "box-raw-plain", type: "free", title: "퇴근길 버스", body: "퇴근길 버스에서 졸다가 한 정거장을 지나쳤다.", analysis_status: "failed", original_kept_at: ago(4), created_at: ago(9), saved_at: ago(9) }),
+    seedRecord({ id: "box-raw-analyzing", type: "qna", analysis_status: "analyzing", original_kept_at: ago(5), created_at: ago(11), saved_at: ago(11) }),
+    seedRecord({ id: "box-raw-review", type: "free", title: "할머니 집 마당", body: "할머니 집 마당에는 늘 고추가 말라 가고 있었다. 그 냄새가 여름이었다.", original_kept_at: ago(6), created_at: ago(13), saved_at: ago(13) }),
+  ];
+  d.messages = [
+    ...qnaMessages("box-pending-analyzing", [["요즘 가장 자주 떠올리는 장면이 있나요?", "출근길 지하철 창에 비친 내 얼굴이요."], ["그때 어떤 기분이었나요?", "조금 지쳐 보였어요."]]),
+    ...qnaMessages("box-pending-empty", [["오늘 하루를 한 장면으로 남긴다면?", "그냥 평범했어요."], ["무엇이 가장 평범했나요?", "다 똑같았어요."]]),
+    ...qnaMessages("box-draft-qna", [["이번 주에 가장 오래 머문 장소는 어디였나요?", "동네 도서관 창가 자리요."], ["그곳에 누구와 있었나요?", null]]),
+    ...qnaMessages("box-kept-3", [["요즘 가장 자주 떠올리는 장면이 있나요?", "이사 첫날 밤 엄마와 통화한 장면이요."], ["그때 어떤 이야기를 나눴나요?", "밥은 먹었냐고, 문단속 잘하라고 하셨어요."]]),
+    ...qnaMessages("box-raw-analyzing", [["최근에 처음 해 본 일이 있나요?", "회사에서 처음 발표를 했어요."], ["그때 누가 있었나요?", "팀 사람들 모두요."]]),
+  ];
+  d.checkpoints = { "box-draft-qna": { seq: 2, pendingId: "box-draft-qna-m2", at: minutesAgo(20) } };
+  d.materials = [
+    seedMaterial({ id: "box-mat-1", record_id: "box-kept-1", title: "혼자 아팠던 날", summary: "혼자 아픈 날 엄마의 레시피로 고마움을 느낀 경험", evidence: "엄마가 전화로 죽 끓이는 법을 알려 줬다.", keywords: ["감기", "엄마", "죽"], topic_ids: [topicId("가족"), topicId("몸·건강")], used_count: 2, created_at: ago(5) }),
+    seedMaterial({ id: "box-mat-2", record_id: "box-kept-2", title: "퇴근길 노을", summary: "노을을 보며 떠올린 엄마와의 기억", evidence: "작년에 엄마랑 같이 본 노을이 생각났다.", keywords: ["노을", "퇴근길"], topic_ids: [topicId("일상"), topicId("자연·계절")], used_count: 0, created_at: ago(7) }),
+    seedMaterial({ id: "box-mat-3", record_id: "box-kept-3", title: "이사 첫날 밤의 통화", summary: "독립한 첫날 밤 엄마의 걱정", evidence: "밥은 먹었냐고, 문단속 잘하라고 하셨어요.", keywords: ["이사", "통화"], topic_ids: [topicId("가족")], used_count: 1, created_at: ago(9) }),
+    // 확정 전 후보 (확인해 주세요)
+    seedMaterial({ id: "box-cand-1", record_id: "box-pending-review", title: "이사 첫날", summary: "짐 사이에서 먹은 첫 끼", evidence: "바닥에 앉아 컵라면을 먹었다.", keywords: ["이사", "컵라면"], topic_ids: [topicId("일상")], confirmed_at: null, created_at: ago(1) }),
+    seedMaterial({ id: "box-cand-2", record_id: "box-raw-review", title: "할머니 집 마당", summary: "할머니 집 마당의 여름 냄새", evidence: "그 냄새가 여름이었다.", keywords: ["할머니", "여름"], topic_ids: [topicId("가족"), topicId("자연·계절")], confirmed_at: null, created_at: ago(6) }),
+  ];
+  // 분석 중인 기록: M120을 열면 2~4번째 조회에서 결과가 나온다
+  for (const id of ["box-pending-analyzing", "box-raw-analyzing"]) {
+    d.analyses[id] = { requestId: d.nextRequestId++, startedAt: Date.now(), polls: 0, pollsNeeded: 3 };
+  }
+}
