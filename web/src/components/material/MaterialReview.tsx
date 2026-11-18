@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLeaveGuard } from "@/components/collect/useLeaveGuard";
 import {
   BottomActionBar,
@@ -51,10 +51,12 @@ const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
  */
 export default function MaterialReviewScreen({ recordId }: { recordId: string }) {
   const { bfcacheId } = useRouter();
-  return <MaterialReview key={`${bfcacheId}:${recordId}`} recordId={recordId} />;
+  // ?manual=1: 보관한 원본(M130)의 [직접 정리하기] → 실패면 직접 정리하기 칸을 바로 연다
+  const openManual = useSearchParams().get("manual") === "1";
+  return <MaterialReview key={`${bfcacheId}:${recordId}:${openManual}`} recordId={recordId} openManual={openManual} />;
 }
 
-function MaterialReview({ recordId }: { recordId: string }) {
+function MaterialReview({ recordId, openManual }: { recordId: string; openManual: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
@@ -74,6 +76,7 @@ function MaterialReview({ recordId }: { recordId: string }) {
   const [leaveOpen, setLeaveOpen] = useState(false);
   /** 실패 뒤 [직접 정리하기] 중 */
   const [manual, setManual] = useState(false);
+  const manualOpened = useRef(false);
   /** 다시 분석·원본만 보관·기록 삭제·새로 시작 요청 중 */
   const [acting, setActing] = useState<"reanalyze" | "keep" | "delete" | "restart" | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -122,9 +125,17 @@ function MaterialReview({ recordId }: { recordId: string }) {
       }
       applyState(res.data);
       setSlow(res.data.analysis_status === "analyzing");
+      // ?manual=1이고 실패면 직접 정리하기 칸을 바로 연다 (들어올 때 한 번)
+      if (openManual && !manualOpened.current && res.data.analysis_status === "failed" && !res.data.material) {
+        manualOpened.current = true;
+        const empty = formOf(null);
+        setForm(empty);
+        setInitialForm(empty);
+        setManual(true);
+      }
     });
     return () => controller.abort(); // 화면을 나가면 기다림만 멈춘다 (분석은 서버에서 계속)
-  }, [recordId, waitAttempt, applyState, handleCommonError]);
+  }, [recordId, waitAttempt, applyState, handleCommonError, openManual]);
 
   /* ---------- 나가기 ---------- */
 
