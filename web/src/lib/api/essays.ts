@@ -1,5 +1,18 @@
 import { request, type ApiResult } from "./client";
-import type { Essay, EssayDraft, SaveEssayDraftInput, SaveEssayInput } from "./types";
+import type {
+  CreateAiDraftInput,
+  Essay,
+  EssayDraft,
+  EssayLength,
+  RegenerateBase,
+  RegenResult,
+  SaveEssayDraftInput,
+  SaveEssayInput,
+  Style,
+} from "./types";
+
+/** AI를 부르는 요청의 제한 시간 (B가 AI를 최대 55초 기다림) */
+const AI_TIMEOUT_MS = 70_000;
 
 /*
  * 직접 쓰기 (N140) — B routers/essays.py
@@ -33,4 +46,47 @@ export function saveEssayDraft(input: SaveEssayDraftInput) {
  */
 export function saveEssay(input: SaveEssayInput) {
   return request<Essay>({ method: "POST", path: "/essays", body: input, mock: { key: "essays.save" } });
+}
+
+/* ---------- 글 상세 · AI 초안 (W310~W341) — B essays.py · ai_essays.py ---------- */
+
+/** 글 상세: 버전들(초안 → v1 → …)과 사용한 소재. 404 essay_not_found */
+export function getEssay(essayId: string) {
+  return request<Essay>({ method: "GET", path: `/essays/${essayId}`, mock: { key: "essays.get", params: { essayId } } });
+}
+
+/**
+ * [에세이 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
+ * 201, 같은 save_token이면 200 + 이미 만든 글 (AI를 다시 부르지 않음).
+ * 오류: 422 material_not_available, 404 suggestion_not_found, 429 daily_limit, 502 ai_failed
+ */
+export function createAiDraft(input: CreateAiDraftInput) {
+  return request<Essay>({ method: "POST", path: "/essays/ai", body: input, timeoutMs: AI_TIMEOUT_MS, mock: { key: "essays.ai.create" } });
+}
+
+/**
+ * [다시 만들기]: 보고 있던 버전(또는 직전 결과)을 바탕으로 다시 쓴다. 결과는 [저장하기] 전까지 버전이 아니다 → W340.
+ * 오류: 409 no_result(직전 결과가 없거나 이미 저장됨), 404 version_not_found·essay_not_found, 429 daily_limit, 502 ai_failed
+ */
+export function regenerateEssay(essayId: string, base: RegenerateBase, style: Style, length: EssayLength) {
+  return request<RegenResult>({
+    method: "POST",
+    path: `/essays/${essayId}/regenerate`,
+    body: { ...base, style, length },
+    timeoutMs: AI_TIMEOUT_MS,
+    mock: { key: "essays.regenerate", params: { essayId } },
+  });
+}
+
+/**
+ * W341 [저장하기]: 다시 만든 결과를 다음 번호 버전으로 (초안 다음 첫 저장은 v1) → L120.
+ * 201, 같은 save_token이면 200 (버전은 하나). 결과가 없으면(이미 저장됨 등) 409 no_result
+ */
+export function saveRegeneration(essayId: string, requestId: number, input: { save_token: string }) {
+  return request<Essay>({
+    method: "POST",
+    path: `/essays/${essayId}/regenerations/${requestId}/save`,
+    body: input,
+    mock: { key: "essays.regeneration.save", params: { essayId, requestId: String(requestId) } },
+  });
 }

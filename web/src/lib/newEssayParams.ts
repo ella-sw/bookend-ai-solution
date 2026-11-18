@@ -54,3 +54,34 @@ export function writingStartedProps(
   }
   return { write_mode: writeMode, entry_path: params.from === "suggestion" ? "home" : params.from, material_count: count };
 }
+
+/* ---------- AI 초안 화면 주소 (W310·W330·W340) ---------- */
+
+/** 다시 만들기 바탕: 보고 있던 버전 또는 직전에 다시 만든(저장 안 한) 결과 */
+export type RegenBaseParam = { version: string } | { request: number };
+
+/** W310 다시 만들기 모드: ?regen={essayId}&version={versionId} 또는 &request={requestId} */
+export function regenStyleHref(base: string, essayId: string, from: RegenBaseParam): string {
+  const q = new URLSearchParams({ regen: essayId });
+  if ("version" in from) q.set("version", from.version);
+  else q.set("request", String(from.request));
+  return `${base}?${q.toString()}`;
+}
+
+/** W310 주소에서 다시 만들기 모드 값 읽기. 다시 만들기가 아니면 null */
+export function readRegenParams(search: { get(name: string): string | null }): { essayId: string; base: RegenBaseParam | null } | null {
+  const essayId = search.get("regen");
+  if (!essayId) return null;
+  const version = search.get("version");
+  const request = Number(search.get("request"));
+  if (version) return { essayId, base: { version } };
+  if (Number.isInteger(request) && request > 0) return { essayId, base: { request } };
+  return { essayId, base: null };
+}
+
+/** W330 초안 결과 주소 */
+export const draftResultHref = (base: string, essayId: string) => `${base}?essay=${encodeURIComponent(essayId)}`;
+
+/** W340 다시 만든 결과 주소 */
+export const draftRegenerateHref = (base: string, essayId: string, requestId: number) =>
+  `${base}?essay=${encodeURIComponent(essayId)}&request=${requestId}`;

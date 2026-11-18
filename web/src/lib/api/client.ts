@@ -40,6 +40,8 @@ export type ApiErrorKind =
  *   409 no_result (M131 [바꾸기]인데 다시 분석 결과가 없음)
  * - 글·제안 (B essays.py·suggestions.py): 404 suggestion_not_found·essay_not_found·draft_not_found,
  *   422 material_not_available(삭제했거나 보관 전 소재)·empty_body, 409 save_token_used
+ * - AI 초안 (B ai_essays.py): 502 ai_failed('에세이를 만들지 못했어요' + [다시 시도]), 429 daily_limit,
+ *   409 no_result(다시 만든 결과가 없음·이미 저장됨), 404 version_not_found
  * - 422 bad_request: invalid_daily_question, empty_body, missing_field, unexpected_field, record_type_mismatch
  *   (missing_field·unexpected_field는 서버가 "missing_field: record_type"처럼 칸 이름을 붙여 줌 → 앞부분만 code)
  * - 404 not_found (이벤트): record_not_found, essay_not_found, suggestion_not_found
@@ -80,6 +82,7 @@ export type ApiErrorCode =
   | "material_not_available"
   | "essay_not_found"
   | "save_token_used"
+  | "version_not_found"
   | (string & {});
 
 export interface ApiError {

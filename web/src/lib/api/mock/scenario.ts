@@ -15,6 +15,9 @@ import type { MockKey } from "./keys";
  *     하루 한도 → 저장 때 failed + daily_limit_reached, 다시 분석 429 daily_limit
  * - 다시 분석 (M131): 결과는 material.reanalysis.result 키로 고른다 (정상 → 2~4번째 조회에서 done /
  *   빈 결과 → empty / 실패 → failed / 시간 초과 → 60초 뒤 failed). material.reanalyze를 '하루 한도'로 두면 429 daily_limit
+ * - AI 초안 (essays.ai.create · essays.regenerate): 2~4초 걸려서 응답 ('응답 기다림'이 0이면 바로).
+ *   AI 실패 → 502 ai_failed / 하루 한도 → 429 daily_limit / 글자 수 범위 밖 → in_length_range = false /
+ *   삭제한 소재 있음 → 다시 만들기 결과에 deleted_materials_left_out = true (실제로 삭제한 소재가 있어도 true)
  * - unauthorized: 세션 무효 (SDK가 세션을 지운 경우 흉내) → 목업 세션을 지우고 kind = unauthorized
  * - not_consented: 동의 전 → 403 not_consented (GET /me는 404, users.ts가 kind = not_consented로 바꿈). 세션 유지
  * 이 브라우저에만 저장된다 (개발용). 저장이 막힌 환경이면 기본값(ok)으로 동작.
@@ -26,8 +29,10 @@ export const MOCK_SCENARIOS = {
   timeout: "시간 초과",
   empty: "빈 결과 · 소재 없음",
   slow: "느림 (성공)",
-  ai_fail: "AI 실패 (문답: ai_failed = true)",
-  daily_limit: "하루 한도 (문답: 새 질문 없음)",
+  ai_fail: "AI 실패 (문답: ai_failed / AI 초안: 502)",
+  daily_limit: "하루 한도 (문답: 새 질문 없음 / AI 초안: 429)",
+  length_out: "글자 수 범위 밖 (AI 초안)",
+  deleted_left_out: "삭제한 소재 있음 (다시 만들기)",
   unauthorized: "세션 무효 (세션 지움 → O110)",
   not_consented: "동의 전 (403 not_consented)",
 } as const;
