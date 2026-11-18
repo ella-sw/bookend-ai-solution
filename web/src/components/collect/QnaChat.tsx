@@ -76,6 +76,9 @@ async function loadInitial(resume: ResumeMode | null): Promise<Initial> {
  * - 다음 질문이 없고(pending_question = null) 끝나지 않았으면 AI 실패 → [다시 시도] requestNextQuestion
  * - 409 not_pending_question·finished, 404 conversation_not_found → 지금 상태를 다시 불러와 맞춘다
  * - [다른 질문 보기 N]: 후속 질문일 때만, N = replace_left. 실패(ai_failed)면 그대로 + '질문을 바꾸지 못했어요' (목록 12번)
+ * - 하루 AI 호출 한도 (B R32, daily_limit_reached): 답변은 저장됨. [다시 시도] 대신 '오늘 사용할 수 있는 횟수를 다 썼어요'
+ *   + can_save에 따라 한 줄 안내. 입력·[다른 질문 보기] 막음, 임시 저장·소재로 저장·나가기는 그대로.
+ *   이 값은 그 응답에서만 true (다시 열면 false → [다시 시도]를 누르면 다시 한도 안내로 바뀜)
  *   0이면 회색·숫자 0, 팝업 없음 + 한 줄 안내 (9·10쪽)
  * - [소재로 저장]: can_save가 false면 회색 + '질문에 하나만 더 답해 주세요' (목록 3번)
  * - W212 (finished): 마무리 말, 입력·다른 질문 보기 막음, [소재로 저장] 강조
@@ -278,7 +281,8 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
       return;
     }
     setQna(res.data);
-    if (res.data.ai_failed) toast("질문을 바꾸지 못했어요");
+    if (res.data.daily_limit_reached) toast("오늘 사용할 수 있는 횟수를 다 썼어요");
+    else if (res.data.ai_failed) toast("질문을 바꾸지 못했어요");
   };
 
   /* ---------- 임시 저장 · 소재로 저장 ---------- */
@@ -362,6 +366,8 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const finished = qna?.finished ?? false;
   // 다음 질문이 없고 끝나지도 않음 = AI가 질문을 만들지 못함 (답변은 저장돼 있음)
   const nextMissing = qna !== null && !qna.pending_question && !qna.finished && !thinking;
+  // 하루 한도로 새 질문을 만들지 않음 (다시 시도해도 오늘은 안 됨)
+  const limitReached = qna?.daily_limit_reached ?? false;
   const canType = !thinking && !replacing && !savingRecord && !finished && !nextMissing && (qna ? !!qna.pending_question : !!currentDaily);
   const answerCount = qna?.answer_count ?? 0;
   const pending = qna?.pending_question ?? null;
@@ -439,7 +445,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
             <button
               type="button"
               onClick={() => void replace()}
-              disabled={replaceLeft === 0 || replacing || thinking}
+              disabled={replaceLeft === 0 || replacing || thinking || limitReached}
               aria-busy={replacing || undefined}
               className="inline-flex h-8 items-center gap-1.5 self-start rounded-full border border-line px-3 text-[13px] text-ink-soft active:bg-subtle disabled:cursor-not-allowed disabled:bg-subtle disabled:text-ink-mute"
             >
@@ -467,7 +473,15 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
           </p>
         )}
 
-        {nextMissing && (
+        {nextMissing && limitReached && (
+          <div role="status" className="rounded-xl bg-subtle px-4 py-3 text-sm">
+            <p className="font-semibold text-ink">오늘 사용할 수 있는 횟수를 다 썼어요</p>
+            <p className="mt-1 text-ink-soft">
+              {qna?.can_save ? "지금까지 내용으로 저장해 보세요." : "임시 저장해 두고 내일 이어서 답해 주세요."}
+            </p>
+          </div>
+        )}
+        {nextMissing && !limitReached && (
           <RetryNotice message="질문을 만들지 못했어요" onRetry={() => void retryNext()} retrying={retryingNext} />
         )}
 

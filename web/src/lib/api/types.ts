@@ -116,6 +116,11 @@ export interface QnaState {
   can_save: boolean;
   /** 다음(또는 바꿀) 질문을 만들지 못함 → [다시 시도] POST /qna/{id}/next. 답변은 저장돼 있음 */
   ai_failed: boolean;
+  /**
+   * 오늘 AI 호출을 다 써서 새 질문을 만들지 않음 (B R32, 837618c). 답변은 저장돼 있고 ai_failed는 false.
+   * 그 요청의 응답에서만 true — 다시 불러오면 false로 온다
+   */
+  daily_limit_reached: boolean;
 }
 
 /** AI 문답 규칙 (ERD 데이터 규칙 10) */

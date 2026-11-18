@@ -112,7 +112,10 @@ function summary(recordId: string) {
 }
 
 /** B: _state */
-function qnaState(record: RecordItem, aiFailed = false): QnaState {
+/** 질문 만들기 결과 (B: _generate_question → "ok" / "failed" / "limit") */
+type GenerateResult = "ok" | "failed" | "limit";
+
+function qnaState(record: RecordItem, result: GenerateResult = "ok"): QnaState {
   const s = summary(record.id);
   return {
     record_id: record.id,
@@ -124,7 +127,8 @@ function qnaState(record: RecordItem, aiFailed = false): QnaState {
     replace_left: Math.max(0, QNA_RULES.replaceLimit - s.replaced),
     finished: s.answerCount >= QNA_RULES.maxAnswers,
     can_save: s.answerCount >= QNA_RULES.minAnswersToSave,
-    ai_failed: aiFailed,
+    ai_failed: result === "failed",
+    daily_limit_reached: result === "limit",
   };
 }
 
@@ -188,8 +192,10 @@ function revertToCheckpoint(record: RecordItem) {
  * 다음(또는 바꿀) 질문 만들기 (B: _generate_question). 'AI 실패' 상황이면 아무것도 바꾸지 않고 false.
  * replaceOf가 있으면 그 질문을 is_replaced로 바꾼 뒤 새 질문을 붙인다.
  */
-function generateQuestion(record: RecordItem, scenario: MockScenario, replaceOf?: MockMessage): boolean {
-  if (scenario === "ai_fail") return false;
+function generateQuestion(record: RecordItem, scenario: MockScenario, replaceOf?: MockMessage): GenerateResult {
+  // 하루 한도: AI를 부르지 않음, 아무것도 바꾸지 않음 (B R32)
+  if (scenario === "daily_limit") return "limit";
+  if (scenario === "ai_fail") return "failed";
   const rows = rowsOf(record.id);
   const used = new Set(rows.map((m) => m.question));
   const question = FOLLOWUP_QUESTIONS.find((q) => !used.has(q)) ?? FOLLOWUP_QUESTIONS[0];
@@ -205,7 +211,7 @@ function generateQuestion(record: RecordItem, scenario: MockScenario, replaceOf?
     is_replaced: false,
   });
   touch(record);
-  return true;
+  return "ok";
 }
 
 function cardStatus(record: RecordItem): PendingCardStatus | null {
@@ -574,8 +580,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       answer: input.answer.trim(),
       is_replaced: false,
     });
-    const ok = generateQuestion(record, scenario);
-    return qnaState(record, !ok);
+    return qnaState(record, generateQuestion(record, scenario));
   },
 
   // 후속 답변. 7번째 답변이면 더 묻지 않음 (finished → W212)
@@ -589,8 +594,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     s.pending!.answer = input.answer.trim();
     touch(record);
     if (s.answerCount + 1 >= QNA_RULES.maxAnswers) return qnaState(record);
-    const ok = generateQuestion(record, scenario);
-    return qnaState(record, !ok);
+    return qnaState(record, generateQuestion(record, scenario));
   },
 
   // [다시 시도] (⑦): 답을 기다리는 질문이 없을 때만 새로 만든다. 있거나 7개면 그대로
@@ -598,8 +602,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     const record = findOpenQna(params.recordId);
     const s = summary(record.id);
     if (s.pending || s.answerCount >= QNA_RULES.maxAnswers) return qnaState(record);
-    const ok = generateQuestion(record, scenario);
-    return qnaState(record, !ok);
+    return qnaState(record, generateQuestion(record, scenario));
   },
 
   // [다른 질문 보기] (목록 12번): 성공 뒤에만 교체·차감. 실패면 그대로 + ai_failed
@@ -610,8 +613,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     if (!s.pending || s.pending.id !== question_id) fail("conflict", "not_pending_question");
     if (s.pending!.question_source !== "followup") fail("conflict", "first_question_not_replaceable");
     if (s.replaced >= QNA_RULES.replaceLimit) fail("conflict", "replace_limit");
-    const ok = generateQuestion(record, scenario, s.pending!);
-    return qnaState(record, !ok);
+    return qnaState(record, generateQuestion(record, scenario, s.pending!));
   },
 
   // [임시 저장] (③·⑤): active면 이전 draft를 지우고 → draft. 기준점(마지막 seq·기다리던 질문·시각) 기록
