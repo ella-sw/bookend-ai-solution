@@ -1,10 +1,8 @@
 import type {
   Candidate,
   DailyQuestion,
-  Material,
   QnaMessage,
   RecordItem,
-  Topic,
   Uuid,
 } from "../types";
 import { TOPIC_NAMES } from "../types";
@@ -29,7 +27,27 @@ const now = () => new Date().toISOString();
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 
-const topics: Topic[] = TOPIC_NAMES.map((name, i) => ({ id: i + 1, name, sort_order: i + 1 }));
+/** 목업 DB의 소재 행 (B: materials + material_topics). 화면에는 AnalysisMaterial·MaterialCard·MaterialDetail 모양으로 나간다 */
+export interface MockMaterial {
+  id: Uuid;
+  record_id: Uuid;
+  title: string | null;
+  summary: string;
+  evidence: string | null;
+  keywords: string[];
+  topic_ids: number[];
+  origin: "ai" | "manual";
+  confirmed_at: string | null;
+  user_edited_at: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  /** 이 소재를 쓴 글 수 (essay_materials에서 셈) */
+  used_count: number;
+}
+
+type Material = MockMaterial;
+
+const topics = TOPIC_NAMES.map((name, i) => ({ id: i + 1, name, sort_order: i + 1 }));
 export const topicId = (name: (typeof TOPIC_NAMES)[number]) => topics.find((t) => t.name === name)!.id;
 
 const DAILY_QUESTION_TEXTS = [
@@ -194,7 +212,6 @@ export interface MockEssay {
 }
 
 export interface MockDb {
-  topics: Topic[];
   dailyQuestions: MockDailyQuestion[];
   records: RecordItem[];
   messages: MockMessage[];
@@ -246,7 +263,6 @@ function createDb(): MockDb {
   });
 
   return {
-    topics,
     dailyQuestions: DAILY_QUESTION_TEXTS.map((question, i) => ({
       id: `dq-${today}-${i + 1}`,
       question_date: today,
@@ -438,4 +454,101 @@ export function makeSampleSuggestion(): MockSuggestion | null {
   d.suggestions = [suggestion];
   persistDb();
   return suggestion;
+}
+
+/**
+ * /dev/mock [글 데이터 채우기]: 내 서재(L110)·글 상세(L120)를 볼 수 있게 글을 채운다 (기존 글은 바뀜).
+ * - 직접 쓰기 임시 저장 1개 / AI 글 초안·v1·v2 / 직접 쓴 글 v1 / 삭제된 소재를 쓴 글 1개
+ * 보관한 소재가 있으면 그 소재를 쓴다 ([소재함 데이터 채우기]를 먼저 누르면 좋음)
+ */
+export function fillEssays() {
+  const d = getDb();
+  const kept = d.materials.filter((m) => m.confirmed_at && !m.deleted_at);
+  const pick = (n: number) => kept.slice(0, n).map((m) => m.id);
+  const at = (days: number) => daysAgo(days);
+  const v = (no: number, kind: MockVersion["kind"], title: string | null, body: string, days: number, extra: Partial<MockVersion> = {}): MockVersion => ({
+    id: newId(),
+    version_no: no,
+    kind,
+    title,
+    body,
+    save_token: null,
+    created_at: at(days),
+    updated_at: at(days),
+    ...extra,
+  });
+  const longBody =
+    "혼자 살기 시작한 첫해, 아플 때마다 엄마의 목소리가 먼저 떠올랐다. 전화로 죽 끓이는 법을 듣던 밤, 냄비 앞에서 한참을 서 있었다. ".repeat(10);
+  const shortBody = "퇴근길 버스 창밖으로 노을이 유난히 붉었다. 작년에 엄마랑 같이 본 노을이 생각났다. ".repeat(5);
+
+  // 삭제된 소재 (글에는 '삭제된 소재'로 남음)
+  const deletedId = "essay-deleted-mat";
+  if (!d.materials.some((m) => m.id === deletedId)) {
+    d.materials.push(
+      seedMaterial({ id: deletedId, record_id: "rec-sample-1", title: "지운 소재", summary: "삭제한 소재", topic_ids: [topicId("일상")], deleted_at: at(1), created_at: at(9) }),
+    );
+  }
+
+  const aiMats = pick(3);
+  const directMats = pick(2);
+  d.essays = [
+    {
+      id: "essay-draft",
+      method: "direct",
+      status: "draft",
+      title: null,
+      draft_body: "오늘 아침에 쓰다 만 글",
+      direction: null,
+      suggestion_id: null,
+      material_ids: [],
+      versions: [],
+      created_at: at(0),
+      updated_at: at(0),
+    },
+    {
+      id: "essay-ai",
+      method: "ai",
+      status: "saved",
+      title: "멀리 있어 더 또렷해진 것들",
+      draft_body: null,
+      direction: "혼자 지내며 가족을 떠올린 순간들을 시간 순서로 엮어요.",
+      suggestion_id: null,
+      material_ids: aiMats,
+      versions: [
+        v(0, "ai_first", "멀리 있어 더 또렷해진 것들", longBody.slice(0, 1180), 3, { style: "감성적", length: "long" }),
+        v(1, "ai_regen", "멀리 있어 더 또렷해진 것들", longBody.slice(0, 1240), 2, { style: "담백함", length: "long", regen_count: 1 }),
+        v(2, "direct_new", "멀리 있어 더 또렷해진 것들", longBody.slice(0, 1300), 1),
+      ],
+      created_at: at(3),
+      updated_at: at(1),
+    },
+    {
+      id: "essay-direct",
+      method: "direct",
+      status: "saved",
+      title: "퇴근길에 본 노을",
+      draft_body: null,
+      direction: null,
+      suggestion_id: null,
+      material_ids: directMats,
+      versions: [v(1, "direct_first", "퇴근길에 본 노을", shortBody, 5)],
+      created_at: at(5),
+      updated_at: at(5),
+    },
+    {
+      id: "essay-deleted",
+      method: "direct",
+      status: "saved",
+      title: "지운 소재로 쓴 글",
+      draft_body: null,
+      direction: null,
+      suggestion_id: null,
+      material_ids: [deletedId, ...pick(1)],
+      versions: [v(1, "direct_first", "지운 소재로 쓴 글", "이 글에 쓴 소재 하나는 소재함에서 삭제했다.", 7)],
+      created_at: at(7),
+      updated_at: at(7),
+    },
+  ];
+  d.regens = {};
+  persistDb();
 }

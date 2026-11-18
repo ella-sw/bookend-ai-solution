@@ -9,6 +9,8 @@ export interface MockSession {
   user_id: string;
   access_token: string;
   consented_at: string | null;
+  /** 마지막으로 모든 기록을 지운 시각 (users.data_cleared_at) */
+  cleared_at?: string | null;
 }
 
 const STORAGE_KEY = "rowflow.mock.session.v1";
@@ -39,6 +41,11 @@ export function signInMockAnonymously(): MockSession {
   const session: MockSession = { user_id: newId(), access_token: `mock-${newId()}`, consented_at: null };
   save(session);
   return session;
+}
+
+export function setMockCleared(at: string) {
+  const session = getMockSession();
+  if (session) save({ ...session, cleared_at: at });
 }
 
 export function setMockConsent(at: string) {

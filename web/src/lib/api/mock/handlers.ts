@@ -4,8 +4,7 @@ import type {
   AnalysisState,
   ConfirmMaterialInput,
   DailyQuestions,
-  HomeSummary,
-  Material,
+  EssayCard,
   MaterialDetail,
   CreateAiDraftInput,
   EditMaterialInput,
@@ -33,7 +32,7 @@ import { ESSAY_RULES, LENGTH_RANGE, MATERIAL_RULES, QNA_RULES, TOPICS } from "..
 import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
-import { clearMockSession, getMockSession, setMockConsent, type MockSession } from "./session";
+import { clearMockSession, getMockSession, setMockCleared, setMockConsent, type MockSession } from "./session";
 import {
   clearUserData,
   FOLLOWUP_QUESTIONS,
@@ -44,6 +43,7 @@ import {
   persistDb,
   topicId,
   type MockEssay,
+  type MockMaterial as Material,
   type MockRegen,
   type MockMessage,
   type MockReanalysis,
@@ -538,7 +538,7 @@ function kstToday() {
 }
 
 function toMe(session: MockSession): Me {
-  return { id: session.user_id, ai_consent_at: session.consented_at, last_seen_at: now(), data_cleared_at: null };
+  return { id: session.user_id, ai_consent_at: session.consented_at, last_seen_at: now(), data_cleared_at: session.cleared_at ?? null };
 }
 
 /* ---------- 이벤트 검사 (B: routers/events.py) ---------- */
@@ -804,6 +804,13 @@ function savedEssay(id: string): MockEssay {
   return getDb().essays.find((e) => e.id === id && e.status === "saved") ?? fail("not_found", "essay_not_found");
 }
 
+/** B essays.py _after_save: 글 제목 = 가장 최근 버전의 제목, 고친 시각 갱신 */
+function afterEssaySave(essay: MockEssay, t: string) {
+  const latest = [...essay.versions].sort((a, b) => b.version_no - a.version_no)[0];
+  essay.title = latest?.title ?? null;
+  essay.updated_at = t;
+}
+
 function regenResultOf(r: MockRegen): RegenResult {
   return {
     request_id: r.request_id,
@@ -837,21 +844,6 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return toMe(getMockSession()!);
   },
 
-  "home.get": ({ scenario }): HomeSummary => {
-    const db = getDb();
-    if (scenario === "empty") return { recent_materials: [], suggestion: null, is_organizing: false };
-    const recent = db.materials
-      .filter((m) => m.confirmed_at && !m.deleted_at)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .slice(0, 3);
-    return {
-      recent_materials: recent,
-      suggestion: db.suggestions[0] ? suggestionOf(db.suggestions[0]) : null,
-      is_organizing: db.records.some((r) => r.analysis_status === "analyzing"),
-    };
-  },
-
-  "topics.list": () => getDb().topics,
 
   /* ----- 자유 기록 (B: routers/records.py) ----- */
 
@@ -1255,7 +1247,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   // 글쓰기 제안 (B suggestions.py)
   "suggestions.list": ({ scenario }): SuggestionList => {
     if (scenario === "empty") return { computing: false, suggestions: [] };
-    return { computing: false, suggestions: getDb().suggestions.map(suggestionOf) };
+    return { computing: scenario === "computing", suggestions: getDb().suggestions.map(suggestionOf) };
   },
 
   "suggestion.get": ({ params }): Suggestion => {
@@ -1461,9 +1453,83 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     return essayOf(essay);
   },
 
-  "settings.clear": () => {
-    clearUserData();
+  // L110 내 서재 (B my_essays): 임시 저장 맨 위, 나머지는 최근에 고친 순서
+  "essays.list": ({ scenario }): EssayCard[] => {
+    if (scenario === "empty") return [];
+    return [...getDb().essays]
+      .sort((a, b) => Number(b.status === "draft") - Number(a.status === "draft") || b.updated_at.localeCompare(a.updated_at))
+      .map((e) => {
+        const latest = Math.max(0, ...e.versions.map((v) => v.version_no));
+        return {
+          id: e.id,
+          title: e.title,
+          method: e.method,
+          state: e.status === "draft" ? "임시 저장" : latest === 0 ? "초안" : `v${latest}`,
+          is_draft: e.status === "draft",
+          updated_at: e.updated_at,
+          material_count: e.material_ids.length,
+        };
+      });
+  },
+
+  // L122 [저장 후 덮어쓰기] (B overwrite_version): 보고 있던 버전의 내용을 바꾼다
+  "essays.version.overwrite": ({ params, body }): Essay => {
+    const input = (body ?? {}) as { title?: string | null; body?: string };
+    if (typeof input.body !== "string" || !input.body.trim()) fail("bad_request", "empty_body");
+    const essay = savedEssay(params.essayId);
+    const v = essay.versions.find((x) => x.id === params.versionId) ?? fail("not_found", "version_not_found");
+    const t = now();
+    v.title = (typeof input.title === "string" ? input.title.trim() : "") || null;
+    v.body = input.body!;
+    v.updated_at = t;
+    afterEssaySave(essay, t);
+    return essayOf(essay);
+  },
+
+  // L122 [새 버전으로 저장] (B save_new_version): 다음 번호. 같은 save_token이면 그 글 (버전은 하나)
+  "essays.version.new": ({ params, body }): Essay => {
+    const db = getDb();
+    const input = (body ?? {}) as { title?: string | null; body?: string; based_on_version_id?: string; save_token?: string };
+    if (typeof input.body !== "string" || !input.body.trim()) fail("bad_request", "empty_body");
+    const essay = savedEssay(params.essayId);
+    if (!input.save_token) fail("bad_request");
+    const done = db.essays.find((e) => e.versions.some((v) => v.save_token === input.save_token));
+    if (done) return essayOf(done);
+    if (!essay.versions.some((v) => v.id === input.based_on_version_id)) fail("not_found", "version_not_found");
+    const t = now();
+    essay.versions.push({
+      id: newId(),
+      version_no: Math.max(0, ...essay.versions.map((v) => v.version_no)) + 1,
+      kind: "direct_new",
+      title: (typeof input.title === "string" ? input.title.trim() : "") || null,
+      body: input.body!,
+      save_token: input.save_token!,
+      based_on_version_id: input.based_on_version_id ?? null,
+      created_at: t,
+      updated_at: t,
+    });
+    afterEssaySave(essay, t);
+    return essayOf(essay);
+  },
+
+  // L121 글 삭제 (B delete_essay): 글·모든 버전·소재 연결. 소재는 남는다. 임시 저장도 지울 수 있다
+  "essays.delete": ({ params }) => {
+    const db = getDb();
+    const essay = db.essays.find((e) => e.id === params.essayId) ?? fail("not_found", "essay_not_found");
+    for (const id of essay.material_ids) {
+      const m = db.materials.find((x) => x.id === id);
+      if (m && essay.status === "saved") m.used_count = Math.max(0, m.used_count - 1);
+    }
+    db.essays = db.essays.filter((e) => e.id !== essay.id);
+    for (const [k, r] of Object.entries(db.regens)) if (r.essay_id === essay.id) delete db.regens[k];
     return null;
+  },
+
+  // S120 모든 기록 지우기 (B DELETE /me/data): 사용자·동의는 남기고 Me를 돌려준다
+  "settings.clear": (): Me => {
+    clearUserData();
+    setMockCleared(now());
+    return toMe(getMockSession() ?? fail("unauthorized"));
   },
 
   // R33 이벤트 (B: routers/events.py와 같은 순서로 검사). 성공은 204 빈 응답

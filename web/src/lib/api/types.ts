@@ -4,8 +4,8 @@
  * - 목록 13·15번 (합의): events.share_method = copy / share_sheet. 취소·실패는 기록 안 함(share_result 칸 없음)
  * - 목록 17번 (합의): records.status에 active(진행 중) 추가. 기록·문답·오늘의 질문 모양은 B 서버 코드
  *   (feat/backend-setup server/app/routers/records.py·qna.py) 기준. 기준점(checkpoint_*)은 서버 안에만 있고 응답에 없음
- * - 목록 7번 (전달됨, 답 대기): materials.updated_at → 합의되면 Material에 추가
- * - 목록 16번 (전달됨, 답 대기): 서버 구조. 아래 '응답 묶음' 모양(HomeSummary 등)은 A의 임시안
+ * - 목록 7번 (전달됨, 답 대기): materials.updated_at → 합의되면 MaterialDetail에 추가
+ * - 응답 모양은 B 서버 코드(feat/backend-setup server/app/routers/*.py) 기준
  */
 
 export type Uuid = string;
@@ -47,12 +47,6 @@ export const TOPIC_NAMES: readonly TopicName[] = TOPICS.map((t) => t.name);
 export interface TopicRef {
   id: number;
   name: string;
-}
-
-export interface Topic {
-  id: number;
-  name: TopicName;
-  sort_order: number;
 }
 
 /* ---------- 원본 기록 · AI 문답 ---------- */
@@ -242,27 +236,6 @@ export interface ConfirmMaterialInput {
   summary: string;
   keywords: string[];
   topics: number[];
-}
-
-/**
- * 목업 DB의 소재 행 + 홈(H110) 목업이 쓰는 모양 (A 임시안).
- * 홈을 B에 맞출 때 바꾼다. 소재함은 MaterialBox·MaterialCard를 쓴다.
- */
-export interface Material {
-  id: Uuid;
-  record_id: Uuid;
-  title: string | null;
-  summary: string;
-  evidence: string | null;
-  keywords: string[];
-  topic_ids: number[];
-  origin: "ai" | "manual";
-  confirmed_at: IsoTime | null;
-  user_edited_at: IsoTime | null;
-  deleted_at: IsoTime | null;
-  created_at: IsoTime;
-  /** 이 소재를 쓴 글 수 (essay_materials에서 셈) */
-  used_count: number;
 }
 
 /* ---------- 소재함 (M110) — B materials.py material_box ---------- */
@@ -497,16 +470,6 @@ export interface RegenResult {
   based_on_version_id: Uuid;
   /** '삭제한 소재는 새로 넣지 않아요' 안내 */
   deleted_materials_left_out: boolean;
-}
-
-/** 홈(H110) 한 번에 받기 */
-export interface HomeSummary {
-  /** 최근 보관 확정 소재 3개 */
-  recent_materials: Material[];
-  /** 보일 제안 카드. 없거나 실패면 null (카드 숨김). 홈을 B에 맞출 때 GET /suggestions로 바꾼다 */
-  suggestion: Suggestion | null;
-  /** 분석 중이면 '소재를 정리하고 있어요' */
-  is_organizing: boolean;
 }
 
 /* ---------- 이벤트 ---------- */

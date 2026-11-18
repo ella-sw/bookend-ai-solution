@@ -6,8 +6,6 @@
 export const MOCK_KEYS = {
   "me.get": "내 정보 · 동의 여부 (첫 화면)",
   "me.consent": "첫 실행 동의 (O110)",
-  "home.get": "홈 데이터 (H110)",
-  "topics.list": "주제 목록",
   "records.free.draft.get": "자유 기록 임시 저장 불러오기 (H121)",
   "records.free.draft.save": "자유 기록 임시 저장 (W111)",
   "records.free.save": "자유 기록 → 소재로 저장 (W110)",
@@ -46,6 +44,10 @@ export const MOCK_KEYS = {
   "essays.ai.create": "AI 초안 만들기 (W320 → W330)",
   "essays.regenerate": "다시 만들기 (W340)",
   "essays.regeneration.save": "다시 만든 결과 저장 (W341)",
+  "essays.list": "내 서재 (L110)",
+  "essays.version.overwrite": "저장 후 덮어쓰기 (L122)",
+  "essays.version.new": "새 버전으로 저장 (L122)",
+  "essays.delete": "글 삭제 (L121)",
   "settings.clear": "모든 기록 지우기 (S120)",
   "events.log": "이벤트 기록",
 } as const;
