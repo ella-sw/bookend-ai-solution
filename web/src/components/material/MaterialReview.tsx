@@ -27,6 +27,7 @@ import {
   type MaterialDetail,
   type Original,
 } from "@/lib/api";
+import { newEssayHref } from "@/lib/newEssayParams";
 import { collectRoutes, routes } from "@/lib/routes";
 import { formOf, MaterialFields, OriginalText, sameForm, validate, type FieldErrors, type Form } from "./MaterialFields";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -302,7 +303,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
     return (
       <>
         {header}
-        <KeptView material={kept} onWrite={() => leave(`${routes.newSelect}?selected=${kept.id}`)} onBox={() => leave(routes.materials)} />
+        <KeptView material={kept} onWrite={() => leave(newEssayHref(routes.newSelect, { m: [kept.id], from: "material_detail" }))} onBox={() => leave(routes.materials)} />
       </>
     );
   }

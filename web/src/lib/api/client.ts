@@ -38,6 +38,8 @@ export type ApiErrorKind =
  * - 소재 (B analysis.py·materials.py): 409 cannot_reanalyze(done·empty) / material_deleted(삭제한 소재의 원본) /
  *   material_confirmed(이미 보관), 404 material_not_found, 422 unknown_topic,
  *   409 no_result (M131 [바꾸기]인데 다시 분석 결과가 없음)
+ * - 글·제안 (B essays.py·suggestions.py): 404 suggestion_not_found·essay_not_found·draft_not_found,
+ *   422 material_not_available(삭제했거나 보관 전 소재)·empty_body, 409 save_token_used
  * - 422 bad_request: invalid_daily_question, empty_body, missing_field, unexpected_field, record_type_mismatch
  *   (missing_field·unexpected_field는 서버가 "missing_field: record_type"처럼 칸 이름을 붙여 줌 → 앞부분만 code)
  * - 404 not_found (이벤트): record_not_found, essay_not_found, suggestion_not_found
@@ -74,6 +76,10 @@ export type ApiErrorCode =
   | "material_not_found"
   | "unknown_topic"
   | "no_result"
+  | "suggestion_not_found"
+  | "material_not_available"
+  | "essay_not_found"
+  | "save_token_used"
   | (string & {});
 
 export interface ApiError {
@@ -94,7 +100,8 @@ export interface RequestOptions {
   /** 예: `/records/${id}/analysis` */
   path: string;
   body?: unknown;
-  query?: Record<string, string | number | undefined>;
+  /** 배열이면 같은 이름으로 여러 번 (예: ?selected=a&selected=b) */
+  query?: Record<string, string | number | readonly string[] | undefined>;
   timeoutMs?: number;
   /** 목업에서 어떤 가짜 응답을 쓸지. params는 주소 안의 id 등 */
   mock: { key: MockKey; params?: Record<string, string> };
@@ -158,7 +165,7 @@ function buildUrl(path: string, query?: RequestOptions["query"]) {
   const qs = query
     ? Object.entries(query)
         .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .flatMap(([k, v]) => (Array.isArray(v) ? v : [v]).map((x) => `${encodeURIComponent(k)}=${encodeURIComponent(String(x))}`))
         .join("&")
     : "";
   return `${API_BASE_URL}${path}${qs ? `?${qs}` : ""}`;

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ButtonLink, Chip, ChipRow, Loading, MaterialCard, RetryNotice, ScreenHeader, type MaterialCardStatus } from "@/components/ui";
 import { getMaterialBox, TOPICS, type MaterialBox, type RecordCard } from "@/lib/api";
 import { formatMonthDay, RECORD_TYPE_LABEL, titleOrPreview } from "@/lib/format";
+import { newEssayHref } from "@/lib/newEssayParams";
 import { collectRoutes, routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
@@ -52,7 +53,7 @@ export default function MaterialBoxScreen() {
     <ScreenHeader
       title="소재함"
       right={
-        <ButtonLink href={routes.newSelect} variant="secondary" className="h-9 px-3 text-sm">
+        <ButtonLink href={newEssayHref(routes.newSelect, { from: "materials" })} variant="secondary" className="h-9 px-3 text-sm">
           새 글 쓰기
         </ButtonLink>
       }

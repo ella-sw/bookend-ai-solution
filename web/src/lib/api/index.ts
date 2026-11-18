@@ -15,5 +15,7 @@ export * from "./home";
 export * from "./records";
 export * from "./qna";
 export * from "./materials";
+export * from "./essays";
+export * from "./suggestions";
 export * from "./settings";
 export * from "./events";

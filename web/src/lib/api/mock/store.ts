@@ -4,7 +4,6 @@ import type {
   Material,
   QnaMessage,
   RecordItem,
-  SuggestionCard,
   Topic,
   Uuid,
 } from "../types";
@@ -138,6 +137,43 @@ export interface MockReanalysis {
   result: Candidate | null;
 }
 
+export interface MockSuggestion {
+  id: Uuid;
+  topic_id: number;
+  title: string;
+  direction: string;
+  reason: string;
+  material_ids: Uuid[];
+  computed_at: string;
+}
+
+export interface MockVersion {
+  id: Uuid;
+  version_no: number;
+  kind: "direct_first" | "direct_new" | "ai_first" | "ai_regen";
+  title: string | null;
+  body: string;
+  save_token: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MockEssay {
+  id: Uuid;
+  method: "direct" | "ai";
+  status: "draft" | "saved";
+  title: string | null;
+  /** 임시 저장 본문 (저장하면 비움) */
+  draft_body: string | null;
+  direction: string | null;
+  suggestion_id: Uuid | null;
+  /** 고른 순서대로 */
+  material_ids: Uuid[];
+  versions: MockVersion[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface MockDb {
   topics: Topic[];
   dailyQuestions: MockDailyQuestion[];
@@ -152,7 +188,10 @@ export interface MockDb {
    * startedAt: 60초 시간 초과 판단용 (서버 규칙)
    */
   analyses: Record<Uuid, { requestId: number; startedAt: number; polls: number; pollsNeeded: number }>;
-  suggestion: SuggestionCard | null;
+  /** 준비된 글쓰기 제안 (B: suggestions, status = ready). 소재는 id로 들고, 응답 때 지금 제목·요약을 채운다 */
+  suggestions: MockSuggestion[];
+  /** 글 (직접 쓰기 임시 저장 1개 + 저장한 글) */
+  essays: MockEssay[];
   /** 저장한 글 id (essays). 이벤트 essay_id 확인용 — 글 기능 목업은 아직 없음 */
   essayIds: Uuid[];
   /** 보관한 소재의 다시 분석 (M131, B: 소재를 확정한 뒤 시작한 최근 분석 요청). 소재 id → 진행·결과 */
@@ -210,19 +249,18 @@ function createDb(): MockDb {
     ],
     checkpoints: { [draftQna.id]: { seq: 3, pendingId: "msg-draft-3", at: draftQnaAt } },
     analyses: {},
-    suggestion: {
-      id: "sug-sample-1",
-      topic_id: topicId("가족"),
-      status: "ready",
-      title: "독립한 뒤 달라진 가족의 의미",
-      direction: "혼자 살면서 가족을 떠올린 순간들을 시간 순서로 엮기",
-      reason: "혼자 살면서 가족을 떠올린 기록들을 함께 엮어볼 수 있어요.",
-      materials: [
-        { id: "mat-sample-3", title: "이사 첫날 밤의 통화" },
-        { id: "mat-sample-1", title: "혼자 아팠던 날" },
-        { id: "mat-sample-2", title: "퇴근길 노을" },
-      ],
-    },
+    suggestions: [
+      {
+        id: "sug-sample-1",
+        topic_id: topicId("가족"),
+        title: "독립한 뒤 달라진 가족의 의미",
+        direction: "혼자 지내며 가족을 떠올린 순간들을 시간 순서로 엮어요.",
+        reason: "세 기록 모두 혼자 지내며 가족을 떠올린 장면이에요.",
+        material_ids: ["mat-sample-3", "mat-sample-1", "mat-sample-2"],
+        computed_at: daysAgo(0),
+      },
+    ],
+    essays: [],
     essayIds: MOCK_ESSAYS.map((e) => e.id),
     reanalyses: {},
     nextRequestId: 1,
@@ -232,14 +270,41 @@ function createDb(): MockDb {
 
 let db: MockDb | null = null;
 
+/**
+ * 목업 DB를 이 탭의 sessionStorage에 남긴다 → 새로고침·주소 직접 입력에도 데이터가 그대로 (탭을 닫으면 사라짐).
+ * 저장 모양이 바뀌면 키의 버전을 올린다 (예전 데이터는 버리고 처음 상태로)
+ */
+const DB_STORAGE_KEY = "rowflow.mock.db.v1";
+
+function loadStoredDb(): MockDb | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(DB_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as MockDb) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 지금 목업 DB를 저장 (요청을 처리한 뒤·개발용 버튼 뒤에 부른다). 저장이 막힌 환경이면 메모리에만 */
+export function persistDb() {
+  try {
+    if (typeof window === "undefined" || !db) return;
+    window.sessionStorage.setItem(DB_STORAGE_KEY, JSON.stringify(db));
+  } catch {
+    // 저장이 막힌 환경: 이 탭 메모리에만 둠
+  }
+}
+
 export function getDb(): MockDb {
-  if (!db) db = createDb();
+  if (!db) db = loadStoredDb() ?? createDb();
   return db;
 }
 
 /** 목업 DB를 처음 상태로 (/dev/mock) */
 export function resetDb() {
   db = createDb();
+  persistDb();
 }
 
 /**
@@ -254,7 +319,8 @@ export function clearUserData() {
   d.messages = [];
   d.materials = [];
   d.analyses = {};
-  d.suggestion = null;
+  d.suggestions = [];
+  d.essays = [];
   d.essayIds = [];
   d.reanalyses = {};
 }
@@ -322,4 +388,31 @@ export function fillMaterialBox() {
   for (const id of ["box-pending-analyzing", "box-raw-analyzing"]) {
     d.analyses[id] = { requestId: d.nextRequestId++, startedAt: Date.now(), polls: 0, pollsNeeded: 3 };
   }
+  persistDb();
+}
+
+/**
+ * /dev/mock [제안 하나 만들기]: 보관한 소재(최근 3개)로 준비된 제안을 하나 만든다 (기존 제안은 바뀜).
+ * 보관한 소재가 3개보다 적으면 null
+ */
+export function makeSampleSuggestion(): MockSuggestion | null {
+  const d = getDb();
+  const kept = d.materials
+    .filter((m) => m.confirmed_at && !m.deleted_at)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, 3);
+  if (kept.length < 3) return null;
+  const topic = kept[0].topic_ids[0] ?? topicId("일상");
+  const suggestion: MockSuggestion = {
+    id: newId(),
+    topic_id: topic,
+    title: `${kept[0].title ?? "그날"}에서 시작하는 이야기`,
+    direction: "가장 최근 기록의 한 장면에서 시작해, 앞선 기억들로 거슬러 올라가며 엮어요.",
+    reason: `${kept.map((m) => `'${m.title ?? "제목 없음"}'`).join(", ")}에 같은 마음이 이어져 있어요.`,
+    material_ids: kept.map((m) => m.id),
+    computed_at: new Date().toISOString(),
+  };
+  d.suggestions = [suggestion];
+  persistDb();
+  return suggestion;
 }

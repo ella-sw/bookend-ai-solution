@@ -8,6 +8,13 @@ import type {
   Material,
   MaterialDetail,
   EditMaterialInput,
+  Essay,
+  EssayDraft,
+  MaterialRef,
+  RelatedMaterial,
+  SaveEssayInput,
+  Suggestion,
+  SuggestionList,
   MaterialBox,
   MaterialCard,
   Original,
@@ -18,7 +25,7 @@ import type {
   RecordItem,
   RecordType,
 } from "../types";
-import { MATERIAL_RULES, QNA_RULES, TOPICS } from "../types";
+import { ESSAY_RULES, MATERIAL_RULES, QNA_RULES, TOPICS } from "../types";
 import { ANALYSIS_TIMEOUT_MS, QNA_RESUME_WINDOW_MS } from "../config";
 import type { MockKey } from "./keys";
 import { getMockSettings, scenarioFor, type MockScenario } from "./scenario";
@@ -30,9 +37,12 @@ import {
   MOCK_ESSAYS,
   newId,
   now,
+  persistDb,
   topicId,
+  type MockEssay,
   type MockMessage,
   type MockReanalysis,
+  type MockSuggestion,
 } from "./store";
 
 /**
@@ -593,8 +603,8 @@ function checkEvent(body: unknown) {
   const db = getDb();
   const exists: Record<"record_id" | "essay_id" | "suggestion_id", (id: string) => boolean> = {
     record_id: (id) => db.records.some((r) => r.id === id),
-    essay_id: (id) => db.essayIds.includes(id),
-    suggestion_id: (id) => db.suggestion?.id === id,
+    essay_id: (id) => db.essayIds.includes(id) || db.essays.some((e) => e.id === id),
+    suggestion_id: (id) => db.suggestions.some((x) => x.id === id),
   };
   for (const f of ["record_id", "essay_id", "suggestion_id"] as const) {
     const v = input[f];
@@ -606,6 +616,141 @@ function checkEvent(body: unknown) {
     const record = db.records.find((r) => r.id === input.record_id)!;
     if (record.type !== input.record_type) fail("bad_request", "record_type_mismatch");
   }
+}
+
+/* ---------- 글쓰기 제안 · 글 (B suggestions.py · essays.py) ---------- */
+
+/** B: Suggestion — 소재는 지금 제목·요약으로 */
+function suggestionOf(sg: MockSuggestion): Suggestion {
+  const db = getDb();
+  return {
+    id: sg.id,
+    topic: topicRefs([sg.topic_id])[0],
+    title: sg.title,
+    direction: sg.direction,
+    reason: sg.reason,
+    materials: sg.material_ids
+      .map((id) => db.materials.find((m) => m.id === id))
+      .filter((m): m is Material => !!m)
+      .map((m) => ({ id: m.id, title: m.title, summary: m.summary })),
+    computed_at: sg.computed_at,
+  };
+}
+
+/** B essays.py: _materials (고른 순서, 삭제된 소재는 deleted) */
+function materialRefs(ids: string[]): MaterialRef[] {
+  const db = getDb();
+  return ids
+    .map((id) => db.materials.find((m) => m.id === id))
+    .filter((m): m is Material => !!m)
+    .map((m) => ({ id: m.id, title: m.title, summary: m.summary, deleted: !!m.deleted_at }));
+}
+
+function draftOf(e: MockEssay): EssayDraft {
+  return {
+    id: e.id,
+    title: e.title,
+    body: e.draft_body ?? "",
+    direction: e.direction,
+    materials: materialRefs(e.material_ids),
+    suggestion_id: e.suggestion_id,
+    updated_at: e.updated_at,
+  };
+}
+
+/** B essays.py: _essay */
+function essayOf(e: MockEssay): Essay {
+  return {
+    id: e.id,
+    method: e.method,
+    title: e.title,
+    direction: e.direction,
+    created_at: e.created_at,
+    updated_at: e.updated_at,
+    materials: materialRefs(e.material_ids),
+    versions: [...e.versions]
+      .sort((a, b) => a.version_no - b.version_no)
+      .map((v) => ({
+        id: v.id,
+        version_no: v.version_no,
+        label: v.version_no === 0 ? "초안" : `v${v.version_no}`,
+        kind: v.kind,
+        title: v.title,
+        body: v.body,
+        char_count: v.body.length,
+        style: null,
+        length: null,
+        in_length_range: null,
+        regen_count: 0,
+        created_at: v.created_at,
+        updated_at: v.updated_at,
+      })),
+  };
+}
+
+/**
+ * B DraftIn·FirstSaveIn 검사 + _check_refs: 입력 모양(422 코드 없음) → 소재(422 material_not_available)
+ * → 제안(404 suggestion_not_found). 소재 id는 중복을 빼고 고른 순서대로
+ */
+function checkEssayInput(body: unknown) {
+  const input = (body ?? {}) as Partial<SaveEssayInput>;
+  const title = typeof input.title === "string" ? input.title.trim() : null;
+  const text = typeof input.body === "string" ? input.body : "";
+  const direction = typeof input.direction === "string" ? input.direction.trim() : null;
+  const ids = Array.isArray(input.material_ids) ? input.material_ids : [];
+  if (title !== null && title.length > ESSAY_RULES.titleMax) fail("bad_request");
+  if (text.length > ESSAY_RULES.bodyMax) fail("bad_request");
+  if (direction !== null && direction.length > ESSAY_RULES.directionMax) fail("bad_request");
+  if (ids.length > ESSAY_RULES.materialsMax) fail("bad_request");
+  const db = getDb();
+  const unique = Array.from(new Set(ids));
+  if (unique.some((id) => !db.materials.some((m) => m.id === id && m.confirmed_at && !m.deleted_at))) {
+    fail("bad_request", "material_not_available");
+  }
+  if (input.suggestion_id && !db.suggestions.some((x) => x.id === input.suggestion_id)) fail("not_found", "suggestion_not_found");
+  return {
+    essay_id: input.essay_id ?? null,
+    title: title || null,
+    body: text,
+    direction: direction || null,
+    material_ids: unique,
+    suggestion_id: input.suggestion_id ?? null,
+    save_token: typeof input.save_token === "string" ? input.save_token : null,
+  };
+}
+
+/** B related_materials: 같은 키워드 2점 + 같은 주제 1점, 같으면 최근 순, 최대 5개 (AI 없음) */
+function relatedMaterials(selected: string[], limit = 5): RelatedMaterial[] {
+  const db = getDb();
+  const usable = db.materials.filter((m) => m.confirmed_at && !m.deleted_at);
+  const ids = Array.from(new Set(selected));
+  if (ids.length === 0) return [];
+  if (ids.some((id) => !usable.some((m) => m.id === id))) fail("not_found", "material_not_found");
+  const chosen = usable.filter((m) => ids.includes(m.id));
+  const selTopics = new Set(chosen.flatMap((m) => m.topic_ids));
+  const norm = (k: string) => k.trim().toLowerCase();
+  const selKeywords = new Set(chosen.flatMap((m) => m.keywords.map(norm)));
+  return usable
+    .filter((m) => !ids.includes(m.id))
+    .map((m) => {
+      const sharedTopics = TOPICS.filter((t) => m.topic_ids.includes(t.id) && selTopics.has(t.id)).map((t) => t.name as string);
+      const sharedKeywords = m.keywords.filter((k) => selKeywords.has(norm(k)));
+      return { m, sharedTopics, sharedKeywords, score: 2 * sharedKeywords.length + sharedTopics.length };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || b.m.created_at.localeCompare(a.m.created_at))
+    .slice(0, limit)
+    .map(({ m, sharedTopics, sharedKeywords }) => ({
+      id: m.id,
+      record_id: m.record_id,
+      title: m.title,
+      summary: m.summary,
+      topics: topicRefs(m.topic_ids),
+      created_at: m.created_at,
+      essay_count: m.used_count,
+      shared_topics: sharedTopics,
+      shared_keywords: sharedKeywords,
+    }));
 }
 
 /* ---------- 처리 함수 (키별) ---------- */
@@ -634,7 +779,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       .slice(0, 3);
     return {
       recent_materials: recent,
-      suggestion: db.suggestion?.status === "ready" ? db.suggestion : null,
+      suggestion: db.suggestions[0] ? suggestionOf(db.suggestions[0]) : null,
       is_organizing: db.records.some((r) => r.analysis_status === "analyzing"),
     };
   },
@@ -1033,6 +1178,95 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   // 목업 전용 (요청 없음): '다시 분석 결과 (M131)' 상황을 고르는 자리
   "material.reanalysis.result": () => null,
 
+  // N110 함께 쓰면 좋은 소재 (B materials.py related_materials)
+  "materials.related": ({ query }): RelatedMaterial[] => {
+    const raw = query?.selected;
+    const selected = Array.isArray(raw) ? raw.map(String) : raw !== undefined ? [String(raw)] : [];
+    return relatedMaterials(selected);
+  },
+
+  // 글쓰기 제안 (B suggestions.py)
+  "suggestions.list": ({ scenario }): SuggestionList => {
+    if (scenario === "empty") return { computing: false, suggestions: [] };
+    return { computing: false, suggestions: getDb().suggestions.map(suggestionOf) };
+  },
+
+  "suggestion.get": ({ params }): Suggestion => {
+    const sg = getDb().suggestions.find((x) => x.id === params.suggestionId);
+    return suggestionOf(sg ?? fail("not_found", "suggestion_not_found"));
+  },
+
+  // N140 직접 쓰기 임시 저장 1개 (B essays.py get_draft). 없으면 404 no_draft
+  "essays.draft.get": ({ scenario }): EssayDraft => {
+    if (scenario === "empty") fail("not_found", "no_draft");
+    const e = getDb().essays.find((x) => x.status === "draft");
+    return draftOf(e ?? fail("not_found", "no_draft"));
+  },
+
+  // [임시 저장] (B save_draft): 만들거나 덮어쓴다. 이어 쓰면 essay_id (이미 저장됐으면 404 draft_not_found)
+  "essays.draft.save": ({ body }): EssayDraft => {
+    const db = getDb();
+    const input = checkEssayInput(body);
+    const t = now();
+    let essay: MockEssay | undefined;
+    if (input.essay_id) {
+      essay = db.essays.find((x) => x.id === input.essay_id && x.status === "draft") ?? fail("not_found", "draft_not_found");
+    } else {
+      essay = db.essays.find((x) => x.status === "draft");
+      if (!essay) {
+        essay = { id: newId(), method: "direct", status: "draft", title: null, draft_body: "", direction: null, suggestion_id: null, material_ids: [], versions: [], created_at: t, updated_at: t };
+        db.essays.push(essay);
+      }
+    }
+    Object.assign(essay, {
+      title: input.title,
+      draft_body: input.body,
+      direction: input.direction,
+      suggestion_id: input.suggestion_id,
+      material_ids: input.material_ids,
+      updated_at: t,
+    });
+    return draftOf(essay);
+  },
+
+  // [저장] 첫 저장 → v1 (B first_save). 같은 save_token·이미 저장된 essay_id면 그 글 (200)
+  "essays.save": ({ body }): Essay => {
+    const db = getDb();
+    const raw = (body ?? {}) as Partial<SaveEssayInput>;
+    if (typeof raw.body !== "string" || !raw.body.trim()) fail("bad_request", "empty_body");
+    if (!raw.save_token) fail("bad_request");
+    const done = db.essays.find((x) => x.versions.some((v) => v.save_token === raw.save_token));
+    if (done) return essayOf(done);
+    const input = checkEssayInput(body);
+    const t = now();
+    let essay: MockEssay;
+    if (input.essay_id) {
+      const found = db.essays.find((x) => x.id === input.essay_id);
+      if (found?.status === "saved") return essayOf(found);
+      if (!found) return fail("not_found", "draft_not_found");
+      essay = found;
+    } else {
+      essay = { id: newId(), method: "direct", status: "saved", title: null, draft_body: null, direction: null, suggestion_id: null, material_ids: [], versions: [], created_at: t, updated_at: t };
+      db.essays.push(essay);
+    }
+    Object.assign(essay, {
+      status: "saved",
+      title: input.title,
+      draft_body: null,
+      direction: input.direction,
+      suggestion_id: input.suggestion_id,
+      material_ids: input.material_ids,
+      updated_at: t,
+    });
+    essay.versions.push({ id: newId(), version_no: 1, kind: "direct_first", title: input.title, body: input.body, save_token: input.save_token, created_at: t, updated_at: t });
+    // 소재를 쓴 글 수 (M110·M130 '글 N편에 사용')
+    for (const id of input.material_ids) {
+      const m = db.materials.find((x) => x.id === id);
+      if (m) m.used_count += 1;
+    }
+    return essayOf(essay);
+  },
+
   "settings.clear": () => {
     clearUserData();
     return null;
@@ -1117,8 +1351,10 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
   try {
     const data = handlers[key]({ params, body: options.body, query: options.query, scenario });
     // 화면이 목업 DB 객체를 직접 고치지 못하게 복사해서 돌려줌
+    persistDb(); // 새로고침해도 남게 (조회만 했어도 분석 진행 횟수 등이 바뀔 수 있음)
     return { ok: true, data: structuredClone(data) as T };
   } catch (e) {
+    persistDb(); // 오류 전에 바뀐 것도 남김
     if (e instanceof MockHttpError) {
       // 서버 detail("missing_field: record_type" 등)을 실제 client.ts와 같은 방법으로 code로 바꾼다
       const code = e.code ? readErrorCode(JSON.stringify({ detail: e.code })) : undefined;

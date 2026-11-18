@@ -36,6 +36,12 @@ export const MOCK_KEYS = {
   "material.reanalysis.apply": "다시 분석 [바꾸기] (M130)",
   "material.reanalysis.dismiss": "다시 분석 [그대로 두기]·[확인] (M130)",
   "material.delete": "소재 삭제 (M131)",
+  "materials.related": "함께 쓰면 좋은 소재 (N110)",
+  "suggestions.list": "글쓰기 제안 목록 (H110)",
+  "suggestion.get": "글쓰기 제안 상세 (N130)",
+  "essays.draft.get": "직접 쓰기 임시 저장 불러오기 (H121·N140)",
+  "essays.draft.save": "직접 쓰기 임시 저장 (N140)",
+  "essays.save": "직접 쓰기 저장 → v1 (N140)",
   "settings.clear": "모든 기록 지우기 (S120)",
   "events.log": "이벤트 기록",
 } as const;
