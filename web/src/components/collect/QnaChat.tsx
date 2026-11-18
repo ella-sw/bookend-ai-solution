@@ -6,6 +6,7 @@ import {
   BottomActionBar,
   BottomActionBarSpacer,
   Button,
+  ConfirmDialog,
   Loading,
   RetryNotice,
   ScreenHeader,
@@ -14,20 +15,26 @@ import {
 } from "@/components/ui";
 import {
   answerQna,
+  discardQna,
+  discardQnaChanges,
   getActiveQna,
   getQnaDraft,
   getTodayQuestions,
   QNA_RULES,
   replaceQnaQuestion,
+  logEvent,
   requestNextQuestion,
+  saveQna,
+  saveQnaDraft,
   startQna,
   type ApiError,
   type ApiResult,
   type DailyQuestions,
   type QnaState,
 } from "@/lib/api";
-import type { ResumeMode } from "@/lib/routes";
+import { routes, type ResumeMode } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { useLeaveGuard } from "./useLeaveGuard";
 
 /** B qna.py: 답변 최대 5,000자 */
 const ANSWER_MAX = 5_000;
@@ -38,6 +45,7 @@ const SHORT_FIRST_ANSWER = 30;
 const RESYNC_CODES = new Set(["not_pending_question", "finished", "conversation_not_found"]);
 
 type Phase = "loading" | "ready" | "loadFailed";
+type ExitChoice = "saveAndLeave" | "discardAndLeave" | "leave" | null;
 
 type Initial =
   | { type: "chat"; qna: QnaState }
@@ -71,6 +79,11 @@ async function loadInitial(resume: ResumeMode | null): Promise<Initial> {
  *   0이면 회색·숫자 0, 팝업 없음 + 한 줄 안내 (9·10쪽)
  * - [소재로 저장]: can_save가 false면 회색 + '질문에 하나만 더 답해 주세요' (목록 3번)
  * - W212 (finished): 마무리 말, 입력·다른 질문 보기 막음, [소재로 저장] 강조
+ * - [임시 저장]: 첫 답변 뒤에만 → W111. [소재로 저장]: saveQna → M120, 실패하면 [다시 시도]
+ * - W211 (헤더 [나가기]·‹·브라우저/휴대폰 뒤로가기): 첫 답변 전 [나가기]/[계속 쓰기],
+ *   첫 답변 뒤 [임시 저장하고 나가기]/[저장하지 않고 나가기]/[계속 쓰기].
+ *   이어 쓰던 draft를 열고 아무것도 안 바꿨으면 팝업 없이 나감
+ * - 기록 시작 이벤트: 화면에 들어올 때마다 1번 (이어서 열면 record_id, 목록 23·24번)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + resume, W110과 같은 이유: cacheComponents의 Activity)
  */
@@ -99,7 +112,19 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const [retryingNext, setRetryingNext] = useState(false);
   /** [다른 질문 보기] 요청 중 */
   const [replacing, setReplacing] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [savingRecord, setSavingRecord] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [draftSavedOpen, setDraftSavedOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
+  /** 마지막으로 불러오거나 임시 저장했을 때의 updated_at (draft의 바뀜 여부) */
+  const [savedUpdatedAt, setSavedUpdatedAt] = useState<string | null>(null);
   const busy = useRef(false);
+  /** W211에서 고른 것. 팝업이 다 닫힌 뒤 실행 */
+  const exitChoice = useRef<ExitChoice>(null);
+  /** 이어서 연 대화 id (이벤트용) */
+  const openedRecordId = useRef<string | null>(null);
+  const eventLogged = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   /* ---------- 불러오기 ---------- */
@@ -126,12 +151,34 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   useEffect(() => {
     let cancelled = false;
     void loadInitial(resume).then((result) => {
-      if (!cancelled) applyInitial(result);
+      if (cancelled) return;
+      if (result.type === "chat") {
+        openedRecordId.current = result.qna.record_id;
+        setSavedUpdatedAt(result.qna.updated_at);
+      }
+      applyInitial(result);
     });
     return () => {
       cancelled = true;
     };
   }, [resume, loadAttempt, applyInitial]);
+
+  /* ---------- 나가기 확인 (W211) ---------- */
+
+  const typed = input.trim() !== "";
+  const dirty =
+    phase === "ready" &&
+    (qna === null ? typed : qna.status === "active" || qna.updated_at !== savedUpdatedAt || typed);
+  const { leave } = useLeaveGuard({ dirty, onBlocked: () => setExitOpen(true) });
+
+  /* ---------- 기록 시작 이벤트 (23·24번) ---------- */
+
+  useEffect(() => {
+    if (phase !== "ready" || eventLogged.current) return;
+    eventLogged.current = true;
+    const recordId = openedRecordId.current;
+    void logEvent("record_started", recordId ? { record_type: "qna", record_id: recordId } : { record_type: "qna" });
+  }, [phase]);
 
   // 새 말풍선이 생기면 맨 아래로
   const messageCount = qna?.messages.length ?? 0;
@@ -234,6 +281,61 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
     if (res.data.ai_failed) toast("질문을 바꾸지 못했어요");
   };
 
+  /* ---------- 임시 저장 · 소재로 저장 ---------- */
+
+  /** 임시 저장. 성공 여부를 돌려준다 (실패 안내는 여기서) */
+  const saveDraft = async (): Promise<boolean> => {
+    if (busy.current || !qna) return false;
+    busy.current = true;
+    setSavingDraft(true);
+    const res = await saveQnaDraft(qna.record_id);
+    busy.current = false;
+    setSavingDraft(false);
+    if (res.ok) {
+      setQna(res.data);
+      setSavedUpdatedAt(res.data.updated_at);
+      return true;
+    }
+    if (!goOnboardingIfNeeded(res.error)) toast("임시 저장하지 못했어요");
+    return false;
+  };
+
+  const saveRecord = async () => {
+    if (busy.current || !qna?.can_save) return;
+    busy.current = true;
+    setSavingRecord(true);
+    setSaveFailed(false);
+    const res = await saveQna(qna.record_id);
+    if (res.ok) {
+      // 이동하는 동안 막힌 채로 둔다
+      leave(routes.materialReview(res.data.id));
+      return;
+    }
+    busy.current = false;
+    setSavingRecord(false);
+    if (goOnboardingIfNeeded(res.error)) return;
+    if (res.error.code && RESYNC_CODES.has(res.error.code)) await resync(qna.status);
+    else setSaveFailed(true);
+  };
+
+  const requestExit = () => {
+    if (dirty) setExitOpen(true);
+    else leave();
+  };
+
+  const onExitDialogClosed = async () => {
+    setExitOpen(false);
+    const choice = exitChoice.current;
+    exitChoice.current = null;
+    if (choice === "leave") leave();
+    if (choice === "saveAndLeave" && (await saveDraft())) leave();
+    if (choice === "discardAndLeave") {
+      // 실패해도 나간다: active는 1시간 뒤 서버가 지우고, draft는 다음에 열 때 되돌린다
+      if (qna) await (qna.status === "active" ? discardQna(qna.record_id) : discardQnaChanges(qna.record_id));
+      leave();
+    }
+  };
+
   /* ---------- 화면 ---------- */
 
   if (phase === "loading") return <Loading fullScreen />;
@@ -260,7 +362,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const finished = qna?.finished ?? false;
   // 다음 질문이 없고 끝나지도 않음 = AI가 질문을 만들지 못함 (답변은 저장돼 있음)
   const nextMissing = qna !== null && !qna.pending_question && !qna.finished && !thinking;
-  const canType = !thinking && !replacing && !finished && !nextMissing && (qna ? !!qna.pending_question : !!currentDaily);
+  const canType = !thinking && !replacing && !savingRecord && !finished && !nextMissing && (qna ? !!qna.pending_question : !!currentDaily);
   const answerCount = qna?.answer_count ?? 0;
   const pending = qna?.pending_question ?? null;
   // 첫 질문은 바꿀 수 없음 → 후속 질문일 때만 (W212에서는 막음)
@@ -271,7 +373,29 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
 
   return (
     <>
-      <ScreenHeader title="AI 질문" back />
+      <ScreenHeader
+        title="AI 질문"
+        back
+        onBack={requestExit}
+        right={
+          <>
+            <Button
+              variant="ghost"
+              className="h-9 px-2.5 text-sm"
+              loading={savingDraft}
+              disabled={!qna || thinking || replacing || savingRecord}
+              onClick={async () => {
+                if (await saveDraft()) setDraftSavedOpen(true);
+              }}
+            >
+              임시 저장
+            </Button>
+            <Button variant="ghost" className="h-9 px-2.5 text-sm" disabled={savingRecord} onClick={requestExit}>
+              나가기
+            </Button>
+          </>
+        }
+      />
 
       <div className="px-5 pt-3" aria-label="진행도">
         <div className="flex items-center justify-between text-sm">
@@ -354,14 +478,31 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
         {finished ? (
           <>
             <p className="mb-2 text-center text-sm text-ink-mute">질문이 모두 끝났어요</p>
-            <Button block size="lg" disabled={!canSave}>
+            {saveFailed && (
+              <div className="mb-2">
+                <RetryNotice message="연결이 불안정해요" onRetry={() => void saveRecord()} retrying={savingRecord} />
+              </div>
+            )}
+            <Button block size="lg" disabled={!canSave} loading={savingRecord} onClick={() => void saveRecord()}>
               소재로 저장
             </Button>
           </>
         ) : (
           <>
             {qna && !canSave && <p className="mb-1.5 text-center text-xs text-ink-soft">질문에 하나만 더 답해 주세요</p>}
-            <Button block variant="secondary" className="mb-2" disabled={!canSave}>
+            {saveFailed && (
+              <div className="mb-2">
+                <RetryNotice message="연결이 불안정해요" onRetry={() => void saveRecord()} retrying={savingRecord} />
+              </div>
+            )}
+            <Button
+              block
+              variant="secondary"
+              className="mb-2"
+              disabled={!canSave || thinking || replacing}
+              loading={savingRecord}
+              onClick={() => void saveRecord()}
+            >
               소재로 저장
             </Button>
             {showShortHint && (
@@ -396,6 +537,34 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
           </>
         )}
       </BottomActionBar>
+
+      {/* W111 임시 저장됨 */}
+      <ConfirmDialog
+        open={draftSavedOpen}
+        onClose={() => setDraftSavedOpen(false)}
+        title="임시 저장됐습니다."
+        actions={[{ label: "확인", variant: "primary", onClick: () => {} }]}
+      />
+
+      {/* W211 나가기 확인. 고른 동작은 팝업이 닫힌 뒤 onExitDialogClosed에서 실행 */}
+      <ConfirmDialog
+        open={exitOpen}
+        onClose={() => void onExitDialogClosed()}
+        title="대화를 그만할까요?"
+        description={qna ? "임시 저장하지 않은 대화는 사라져요." : undefined}
+        actions={
+          qna
+            ? [
+                { label: "임시 저장하고 나가기", variant: "primary", onClick: () => (exitChoice.current = "saveAndLeave") },
+                { label: "저장하지 않고 나가기", onClick: () => (exitChoice.current = "discardAndLeave") },
+                { label: "계속 쓰기", variant: "ghost", onClick: () => (exitChoice.current = null) },
+              ]
+            : [
+                { label: "나가기", onClick: () => (exitChoice.current = "leave") },
+                { label: "계속 쓰기", variant: "primary", onClick: () => (exitChoice.current = null) },
+              ]
+        }
+      />
     </>
   );
 }
