@@ -117,3 +117,12 @@ Environment Variables (값은 대시보드에만 넣고 커밋하지 않는다):
 - 무료 요금제는 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
 - 배포 확인: `https://<서비스 주소>/health` → `{"status":"ok"}`, `/docs`
 - DB 구조 변경은 배포와 별개로 `supabase db push --remote`로 반영한다.
+
+## 실제 서버 전체 흐름 점검
+
+```bash
+uv run python scripts/e2e_check.py                       # 배포된 서버
+uv run python scripts/e2e_check.py http://localhost:8000  # 내 컴퓨터의 서버
+```
+
+테스트용 익명 사용자 1명으로 동의 → 기록·분석·보관 → AI 문답 → 소재함·추천 → 제안 → AI 초안·다시 만들기 → 직접 쓰기 → 지우기까지 45단계를 실행하고, 끝나면 (실패해도) 그 사용자를 지운다. `.env`에 `SUPABASE_PUBLISHABLE_KEY`, `DATABASE_URL`이 필요하다. AI 호출이 약 10회 일어나므로 실제 AI 연결 뒤에는 비용이 든다.
