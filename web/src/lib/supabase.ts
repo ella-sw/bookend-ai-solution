@@ -12,6 +12,7 @@ import { USE_MOCK } from "./api/config";
  *   (NEXT_PUBLIC_ 값은 브라우저에 그대로 나간다)
  *
  * 목업(USE_MOCK)이면 만들지 않는다 → null. 서버 렌더링 중에도 null (세션은 브라우저 저장소에 있음).
+ * env 누락·비밀 키면 throw한다. api/auth.ts가 받아서 reason = "server"(ApiResult)로 바꾼다.
  */
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";

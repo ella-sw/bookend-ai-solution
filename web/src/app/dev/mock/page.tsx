@@ -33,7 +33,7 @@ import {
   type MockScenario,
   type MockSettings,
 } from "@/lib/api/mock/scenario";
-import { clearMockSession } from "@/lib/api/mock/session";
+import { clearMockSession, startMockConsentedUser } from "@/lib/api/mock/session";
 import { resetDb } from "@/lib/api/mock/store";
 
 /** 개발용: 목업 상황 고르기 + API 함수 시험 호출 (실제 서비스 메뉴에는 없음) */
@@ -171,6 +171,17 @@ export default function DevMockPage() {
               onClick={() => run("세션 확인", async () => ({ ok: true, data: { has_session: await hasSession() } }))}
             >
               세션 확인
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={running || !USE_MOCK}
+              onClick={() => {
+                const session = startMockConsentedUser(new Date().toISOString());
+                setLog(`동의한 사용자로 시작했어요
+${JSON.stringify({ user_id: session.user_id, consented_at: session.consented_at }, null, 2)}`);
+              }}
+            >
+              동의한 사용자로 시작
             </Button>
             <Button
               variant="secondary"

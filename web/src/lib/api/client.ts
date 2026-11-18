@@ -12,9 +12,10 @@ import type { MockKey } from "./mock/keys";
  */
 
 /**
- * - unauthorized: 세션 무효 → 세션은 이미 지워짐. 화면은 O110으로
+ * - unauthorized: 세션이 없다 (처음부터 없었거나, 새 토큰 받기가 거절돼 SDK가 지움). 화면은 O110으로
  * - not_consented: 동의 전 (403 not_consented, GET /me의 404 not_consented도 같게) → 세션은 남김. 화면은 O110으로
- * - network: 연결 문제 (토큰 갱신 실패 포함). 세션은 남김 → '연결이 불안정해요' + [다시 시도]
+ * - network: 연결 문제 (토큰 갱신 실패 뒤 세션이 남아 있는 경우 포함). 세션은 남음 → '연결이 불안정해요' + [다시 시도]
+ * - server: 서버 오류, 또는 설정 오류(Supabase env 누락·비밀 키). throw하지 않고 ApiResult로 돌려준다
  */
 export type ApiErrorKind =
   | "network"
@@ -197,7 +198,7 @@ export async function request<T>(options: RequestOptions): Promise<ApiResult<T>>
     sent = await send(options, body, refreshed.token);
     if (!sent.ok) return sent;
     // 새 토큰도 거절: Supabase는 세션이 유효하다고 했으므로 서버 쪽 문제로 본다.
-    // 세션을 지우면 기록에 다시 못 들어가므로 지우지 않고 '잠시 후 다시 시도'
+    // 세션은 그대로 둔다 (지우면 기록에 다시 못 들어감) → '잠시 후 다시 시도'
     if (sent.status === 401) return { ok: false, error: apiError("server", 401) };
   }
 

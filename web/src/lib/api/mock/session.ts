@@ -46,7 +46,14 @@ export function setMockConsent(at: string) {
   if (session && !session.consented_at) save({ ...session, consented_at: at });
 }
 
-/** 세션 지우기 (세션 무효 흉내, /dev/mock) */
+/** /dev/mock 바로가기: 동의한 사용자로 시작 (세션이 있으면 그 사용자로 동의만) */
+export function startMockConsentedUser(at: string): MockSession {
+  if (!getMockSession()) signInMockAnonymously();
+  setMockConsent(at);
+  return getMockSession()!;
+}
+
+/** 세션 지우기 (SDK가 세션을 지운 상황 흉내, /dev/mock) */
 export function clearMockSession() {
   save(null);
 }

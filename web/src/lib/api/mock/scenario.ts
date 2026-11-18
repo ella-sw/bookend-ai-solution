@@ -6,7 +6,7 @@ import type { MockKey } from "./keys";
  * - empty: 빈 결과 (분석이면 '소재 없음', 목록이면 빈 목록) / slow: 느리지만 성공
  * - ai_fail: AI 문답에서 질문 만들기만 실패 → ai_failed = true (qna.start·answer·next·replace).
  *   답변은 저장되고, [다른 질문 보기]는 기존 질문·횟수 그대로. 다른 키는 정상과 같다
- * - unauthorized: 세션 무효 → 목업 세션을 지우고 kind = unauthorized
+ * - unauthorized: 세션 무효 (SDK가 세션을 지운 경우 흉내) → 목업 세션을 지우고 kind = unauthorized
  * - not_consented: 동의 전 → 403 not_consented (GET /me는 404, users.ts가 kind = not_consented로 바꿈). 세션 유지
  * 이 브라우저에만 저장된다 (개발용). 저장이 막힌 환경이면 기본값(ok)으로 동작.
  */

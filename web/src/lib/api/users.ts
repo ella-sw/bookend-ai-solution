@@ -10,8 +10,9 @@ import type { Me } from "./types";
  * 2. true면 getMe()
  *    · ok → 홈
  *    · error.kind = "not_consented" → O110 (세션은 그대로. [동의하고 시작하기]가 같은 사용자로 동의)
- *    · error.kind = "unauthorized" → 세션이 무효라 이미 지워짐 → O110
+ *    · error.kind = "unauthorized" → 세션이 없음 (새 토큰 받기가 거절돼 SDK가 지움) → O110
  *    · error.kind = "network" 등 → '연결이 불안정해요' + [다시 시도] (세션 유지)
+ *    · error.kind = "server" → 서버 오류 또는 설정 오류(env 누락·비밀 키)
  * 3. O110 [동의하고 시작하기] → startWithConsent()
  *
  * 목업(USE_MOCK)도 같은 흐름이다. 목업 세션은 이 브라우저의 localStorage에 남는다 (mock/session.ts).
@@ -36,6 +37,7 @@ export async function getMe(): Promise<ApiResult<Me>> {
  * O110 [동의하고 시작하기]: signInAnonymously() → POST /me/consent (본문 없음).
  * - 이미 세션이 있으면 익명 로그인을 다시 하지 않는다 → [다시 시도] 때 사용자가 또 생기지 않음
  * - 다시 불러도 서버는 처음 동의 시각을 그대로 둔다
+ * - 익명 로그인은 진행 중인 요청 하나를 같이 기다린다 (연타해도 사용자 1명)
  * - 실패하면 '연결이 불안정해요' + [다시 시도] (RetryNotice)
  */
 export async function startWithConsent(): Promise<ApiResult<Me>> {

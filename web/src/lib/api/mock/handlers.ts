@@ -711,6 +711,14 @@ const FAIL_DETAIL: Partial<Record<MockKey, { status: number; code: ApiErrorCode 
   "qna.daily": { status: 502, code: "ai_failed" },
 };
 
+/**
+ * 인증 (B 기준: auth.current_user · db.require_consent)
+ * - 세션만 있으면 되는 키 (UserConn·owner_tx): GET /me, POST /me/consent, GET /daily-questions/today
+ * - 그 밖의 데이터 API는 동의도 필요 (ConsentedConn·require_consent) → 동의 전이면 403 not_consented
+ * 세션이 없으면 실제 client.ts는 서버를 부르지 않고 unauthorized → 목업도 같게 (다른 상황보다 먼저)
+ */
+const SESSION_ONLY_KEYS: MockKey[] = ["me.get", "me.consent", "qna.daily"];
+
 /** 분석 결과는 실패·시간 초과를 '요청 오류'가 아니라 '분석 실패 상태'로 돌려준다 */
 const RESULT_LEVEL_KEYS: MockKey[] = ["analysis.get"];
 
@@ -719,6 +727,10 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
   const scenario = scenarioFor(key);
   const settings = getMockSettings();
   const resultLevel = RESULT_LEVEL_KEYS.includes(key);
+
+  // 세션 없음: 서버를 부르지 않는 것과 같으므로 기다림 없이 바로
+  const session = getMockSession();
+  if (!session) return { ok: false, error: apiError("unauthorized", 401) };
 
   await sleep(settings.delayMs + (scenario === "slow" ? SLOW_EXTRA_MS : 0));
 
@@ -733,7 +745,8 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
       return { ok: false, error: apiError("server", detail?.status ?? 500, detail?.code) };
     }
     if (errorKind) return { ok: false, error: apiError(errorKind) };
-    // 세션 무효 흉내: client.ts처럼 세션을 지우고 unauthorized (새 토큰 받기도 거절된 경우)
+    // 세션 무효 흉내: 401 → 새 토큰 받기가 거절되고 access token도 만료돼 SDK가 세션을 지운 경우
+    // (우리 코드는 세션을 지우지 않는다 — 여기서 지우는 건 SDK 동작을 흉내 낸 것)
     if (scenario === "unauthorized") {
       clearMockSession();
       return { ok: false, error: apiError("unauthorized", 401) };
@@ -745,6 +758,11 @@ export async function runMock<T>(options: RequestOptions): Promise<ApiResult<T>>
     }
   } else if (scenario === "network") {
     return { ok: false, error: apiError("network") };
+  }
+
+  // 동의 전: 403 not_consented (세션은 그대로)
+  if (!SESSION_ONLY_KEYS.includes(key) && !session.consented_at) {
+    return { ok: false, error: apiError("not_consented", 403, "not_consented") };
   }
 
   try {
