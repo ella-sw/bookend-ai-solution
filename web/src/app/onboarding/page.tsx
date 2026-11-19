@@ -8,15 +8,16 @@ import {
   Button,
   RetryNotice,
   ScreenHeader,
-  useToast,
 } from "@/components/ui";
+import { AiUsageSheet } from "@/components/common/AiUsageSheet";
 import { startWithConsent } from "@/lib/api";
 import { routes } from "@/lib/routes";
 
 /**
  * O110 첫 실행 안내 · AI 사용 안내 동의 (UI 설계서 v7 O110, 목록 19번)
  * 1. 서비스 소개 → [다음]
- * 2. 시작하기 전에: AI 사용 안내([자세히 보기]) · 기록 보관 안내 · 동의 체크 → [동의하고 시작하기]
+ * 2. 시작하기 전에: AI 사용 안내([자세히 보기] → AI 사용 안내 시트) · 기록 보관 안내 · 동의 체크 → [동의하고 시작하기]
+ *    - 시트를 닫아도 동의 체크는 그대로
  *    - 동의 체크해야 눌림. 요청 중에는 버튼을 막는다 (두 번 눌러도 요청 1번)
  *    - 성공 → 홈. 실패 → '연결이 불안정해요' + [다시 시도], 이 화면에 머묾
  *    - [다시 시도]도 startWithConsent(): 이미 만든 익명 사용자(세션)를 그대로 쓴다
@@ -77,9 +78,10 @@ function IntroStep({ no, title, description }: { no: number; title: string; desc
 
 function Consent({ onBack }: { onBack: () => void }) {
   const router = useRouter();
-  const toast = useToast();
   const checkboxId = useId();
   const [agreed, setAgreed] = useState(false);
+  /** AI 사용 안내 시트. 닫아도 동의 체크(agreed)는 그대로 */
+  const [aiUsageOpen, setAiUsageOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
   // 다시 그려지기 전의 빠른 두 번째 클릭도 막는다
@@ -106,10 +108,9 @@ function Consent({ onBack }: { onBack: () => void }) {
       <div className="flex flex-col gap-4 px-5 pt-5">
         <Notice title="AI 사용 안내">
           <p>AI가 기록을 분석하고 글을 다듬기 위해 외부 AI 회사로 기록이 전달돼요.</p>
-          {/* 개인정보 처리방침 화면은 아직 없음 (설정 S110과 같게 '준비 중') */}
           <button
             type="button"
-            onClick={() => toast("준비 중이에요")}
+            onClick={() => setAiUsageOpen(true)}
             className="mt-2 text-sm font-semibold text-primary active:opacity-70"
           >
             자세히 보기 ›
@@ -147,6 +148,8 @@ function Consent({ onBack }: { onBack: () => void }) {
           동의하고 시작하기
         </Button>
       </BottomActionBar>
+
+      <AiUsageSheet open={aiUsageOpen} onClose={() => setAiUsageOpen(false)} />
     </>
   );
 }
