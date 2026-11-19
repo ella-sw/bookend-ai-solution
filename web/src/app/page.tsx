@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useLayoutEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import EntryGate from "@/components/layout/EntryGate";
 import { CollectSheet } from "@/components/home/CollectSheet";
 import { SuggestionCard } from "@/components/home/SuggestionCard";
@@ -17,23 +17,45 @@ import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
  * - 들어오기 전에 EntryGate가 세션·동의를 확인한다 (목록 19번). 확인 전에는 홈을 그리지 않음
  * - [+ 소재 모으기] → H120 시트 (임시 저장이 있으면 H121) / [✎ 새 글 쓰기] → N110 (from = home)
  * - 글쓰기 제안: 계산 중이면 '소재를 정리하고 있어요', 있으면 첫 번째 카드, 없거나 실패면 숨김
- * - 최근 소재: 보관한 소재 앞 3개 → M130, [전체 보기 ›] → M110. 0개면 첫 소재 안내
+ * - 최근 소재: 보관한 소재 앞 3개 → M130, [전체 보기 ›] → M110. 0개면 첫 소재 안내 + [소재 모으기]
+ * - ?collect=1 (빈 상태의 [소재 모으기], 목록 14번): H120 시트를 연 채로 시작하고 주소에서 그 값을 지운다 (replace)
  * - 들어올 때마다 새로 불러온다 (Activity로 다시 보이면 effect가 다시 돈다)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId): 제안 노출 이벤트도 화면마다 새로 센다
  */
 export default function HomePage() {
-  const { bfcacheId } = useRouter();
   return (
     <EntryGate>
-      <Home key={bfcacheId} />
+      <Suspense fallback={<Loading fullScreen />}>
+        <HomeScreen />
+      </Suspense>
     </EntryGate>
   );
 }
 
-function Home() {
+function HomeScreen() {
+  const { bfcacheId } = useRouter();
+  const openCollect = useSearchParams().get("collect") === "1";
+  return <Home key={bfcacheId} openCollect={openCollect} />;
+}
+
+function Home({ openCollect }: { openCollect: boolean }) {
   const goOnboardingIfNeeded = useOnboardingRedirect();
   const [collectOpen, setCollectOpen] = useState(false);
+
+  // ?collect=1은 한 번만: 주소에서 먼저 지운 뒤(replace) 시트를 연다 → 시트를 닫고 돌아와도 다시 열리지 않는다.
+  // 화면을 그린 직후에 연다 (처음부터 열린 채로 그리면 개발 모드에서 시트의 뒤로가기 기록이 두 번 쌓임)
+  useLayoutEffect(() => {
+    if (!openCollect) return;
+    if (window.location.search) window.history.replaceState(null, "", routes.home);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) setCollectOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [openCollect]);
   const [materials, setMaterials] = useState<MaterialCardData[] | null>(null);
   const [boxFailed, setBoxFailed] = useState(false);
   const [suggestions, setSuggestions] = useState<SuggestionList | null>(null);
@@ -135,7 +157,7 @@ function Home() {
               </p>
             </div>
             <Button variant="secondary" onClick={() => setCollectOpen(true)}>
-              첫 소재 기록하기
+              소재 모으기
             </Button>
           </div>
         ) : (

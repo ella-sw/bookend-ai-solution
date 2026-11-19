@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ButtonLink, Chip, ChipRow, Loading, MaterialCard, RetryNotice, ScreenHeader, type MaterialCardStatus } from "@/components/ui";
-import { getMaterialBox, TOPICS, type MaterialBox, type RecordCard } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { ButtonLink, Chip, ChipRow, Loading, MaterialCard, RetryNotice, ScreenHeader, useToast, type MaterialCardStatus } from "@/components/ui";
+import { deleteRecord, getMaterialBox, TOPICS, type MaterialBox, type RecordCard } from "@/lib/api";
 import { formatMonthDay, RECORD_TYPE_LABEL, titleOrPreview } from "@/lib/format";
 import { newEssayHref } from "@/lib/newEssayParams";
-import { collectRoutes, routes } from "@/lib/routes";
+import { removeQnaInput } from "@/lib/qnaInputStore";
+import { collectHomeHref, collectRoutes, routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { RecordDeleteDialog, recordDeleteFailMessage, RecordMenuSheet } from "./RecordMenu";
 
 /** 확인 대기 카드 표시 (B label → 카드 상태) */
 const PENDING_STATUS: Record<NonNullable<RecordCard["label"]>, MaterialCardStatus> = {
@@ -23,6 +25,9 @@ const keptOriginalStatus = (label: RecordCard["label"]): MaterialCardStatus =>
 /**
  * M110 소재함 (UI 설계서 v7 13쪽, B GET /materials)
  * 확인 대기 → 임시 저장 기록 → 주제 칩 + 보관한 소재 → 원본만 보관한 기록(접힌 구역)
+ * - 확인 대기 카드 오른쪽 [⋯](기록 메뉴) → [기록 지우기] → 확인 → deleteRecord (목록 2번, 분석 중 카드도).
+ *   성공: '기록을 지웠어요' + 다시 불러오기. 실패 문구는 M120과 같음
+ * - 빈 상태 [소재 모으기] → 홈에서 모으기 방식 고르기(H120)를 바로 연다 (목록 14번)
  * 화면에 다시 올 때마다 새로 불러온다 (cacheComponents의 Activity: 보였다가 숨으면 effect가 다시 돈다)
  */
 export default function MaterialBoxScreen() {
@@ -32,6 +37,12 @@ export default function MaterialBoxScreen() {
   const [attempt, setAttempt] = useState(0);
   const [topic, setTopic] = useState<number | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
+  const toast = useToast();
+  /** 기록 메뉴를 연 확인 대기 기록 */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  /** 지우기 확인 중인 기록 */
+  const [deleteFor, setDeleteFor] = useState<string | null>(null);
+  const deleting = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +59,22 @@ export default function MaterialBoxScreen() {
       cancelled = true;
     };
   }, [attempt, goOnboardingIfNeeded]);
+
+  const removeRecord = async (recordId: string) => {
+    if (deleting.current) return;
+    deleting.current = true;
+    const res = await deleteRecord(recordId);
+    deleting.current = false;
+    if (res.ok) {
+      removeQnaInput(recordId); // 보내지 않은 AI 문답 답변도 (목록 9번)
+      toast("기록을 지웠어요");
+      setAttempt((n) => n + 1);
+      return;
+    }
+    if (goOnboardingIfNeeded(res.error)) return;
+    toast(recordDeleteFailMessage(res.error));
+    if (res.error.code === "record_not_found") setAttempt((n) => n + 1);
+  };
 
   const header = (
     <ScreenHeader
@@ -98,8 +125,8 @@ export default function MaterialBoxScreen() {
             <p className="text-[15px] font-semibold">아직 모은 소재가 없어요</p>
             <p className="mt-1 text-sm text-ink-soft">오늘 있었던 일 하나를 적어 볼까요?</p>
           </div>
-          {/* 홈의 [소재 모으기]에서 방식을 고른다 (H120) */}
-          <ButtonLink href={routes.home} variant="secondary">
+          {/* 홈에서 모으기 방식 고르기(H120)를 바로 연다 */}
+          <ButtonLink href={collectHomeHref} variant="secondary">
             소재 모으기
           </ButtonLink>
         </section>
@@ -124,14 +151,26 @@ export default function MaterialBoxScreen() {
         {box.pending.length > 0 && (
           <Section title={`확인 대기 ${box.pending.length}`}>
             {box.pending.map((c) => (
-              <MaterialCard
-                key={c.record_id}
-                href={routes.materialReview(c.record_id)}
-                status={PENDING_STATUS[c.label ?? "failed"]}
-                title={titleOrPreview(c.title, c.preview)}
-                summary={RECORD_TYPE_LABEL[c.record_type]}
-                date={formatMonthDay(c.date)}
-              />
+              <div key={c.record_id} className="flex items-start gap-1">
+                <div className="min-w-0 flex-1">
+                  <MaterialCard
+                    href={routes.materialReview(c.record_id)}
+                    status={PENDING_STATUS[c.label ?? "failed"]}
+                    title={titleOrPreview(c.title, c.preview)}
+                    summary={RECORD_TYPE_LABEL[c.record_type]}
+                    date={formatMonthDay(c.date)}
+                  />
+                </div>
+                {/* 링크 안에 넣지 않고 형제로 (버튼 중첩 금지) */}
+                <button
+                  type="button"
+                  aria-label="기록 메뉴"
+                  onClick={() => setMenuFor(c.record_id)}
+                  className="flex size-11 shrink-0 items-center justify-center rounded-full text-xl text-ink-soft active:bg-subtle"
+                >
+                  ⋯
+                </button>
+              </div>
             ))}
           </Section>
         )}
@@ -207,6 +246,19 @@ export default function MaterialBoxScreen() {
           </section>
         )}
       </div>
+
+      <RecordMenuSheet
+        open={menuFor !== null}
+        onClose={() => setMenuFor(null)}
+        onDelete={() => setDeleteFor(menuFor)}
+      />
+      <RecordDeleteDialog
+        open={deleteFor !== null}
+        onClose={() => setDeleteFor(null)}
+        onConfirm={() => {
+          if (deleteFor) void removeRecord(deleteFor);
+        }}
+      />
     </>
   );
 }

@@ -38,6 +38,12 @@ export const collectRoutes = {
   ai: (resume?: ResumeMode) => (resume ? `${routes.collectAi}?resume=${resume}` : routes.collectAi),
 };
 
+/**
+ * 홈에서 소재 모으기 방식 고르기(H120)를 바로 연다 (목록 14번). 빈 상태의 [소재 모으기]가 쓴다.
+ * 홈은 시트를 연 뒤 주소에서 collect를 지운다 (replace)
+ */
+export const collectHomeHref = `${routes.home}?collect=1`;
+
 /** 하단 탭 4개 (홈 · 소재함 · 내 서재 · 설정) */
 export const tabs = [
   { key: "home", label: "홈", href: routes.home },

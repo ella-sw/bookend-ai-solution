@@ -6,6 +6,7 @@ import {
   BottomActionBar,
   BottomActionBarSpacer,
   Button,
+  ButtonLink,
   Chip,
   ChipRow,
   Loading,
@@ -17,7 +18,7 @@ import { getMaterialBox, getRelatedMaterials, TOPICS, type MaterialCard as Mater
 import { formatMonthDay } from "@/lib/format";
 import { isNewEssayDone, useEnsureFlowId, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { newEssayHref, readNewEssayParams, searchKeyWithoutFlow, type NewEssayParams } from "@/lib/newEssayParams";
-import { routes } from "@/lib/routes";
+import { collectHomeHref, routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useDirectStart } from "./useDirectStart";
 
@@ -30,6 +31,7 @@ const RELATED_DELAY_MS = 300;
  * - 함께 쓰면 좋은 소재: 1개 이상 고르면 (0.3초 묶어서) 참고로 보여 준다. 고르지 않아도 됨
  * - 들어올 때 m이 있으면 그 소재가 선택된 상태 (N120 [+ 소재 추가], N130 [소재 바꾸기], M120·M130)
  * - [다음 (N개)] → N120 (m 고른 순서, s·from·f 그대로) / [소재 없이 직접 쓰기] → N140 (from = no_material, f 그대로)
+ * - 보관한 소재가 없으면: 주 버튼 [소재 모으기](홈에서 H120 바로 열기) / 보조 [소재 없이 직접 쓰기] (목록 14번)
  * - 흐름 id(f)가 없으면 만들어 주소에 붙인다. 이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
  *
  * 새로 들어올 때마다 주소의 값으로 처음부터 (key = bfcacheId + 주소 검색값, f는 빼고)
@@ -133,9 +135,14 @@ function MaterialSelect({ initial, query }: { initial: NewEssayParams; query: st
         {header}
         <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
           <p className="text-[15px] font-semibold">아직 보관한 소재가 없어요</p>
-          <Button variant="secondary" loading={direct.checking} onClick={writeWithout}>
-            소재 없이 직접 쓰기
-          </Button>
+          <div className="flex w-full max-w-xs flex-col gap-2">
+            <ButtonLink href={collectHomeHref} block>
+              소재 모으기
+            </ButtonLink>
+            <Button variant="ghost" block loading={direct.checking} onClick={writeWithout}>
+              소재 없이 직접 쓰기
+            </Button>
+          </div>
         </section>
         {direct.dialog}
       </>

@@ -31,6 +31,7 @@ import { isEssayDetailSeen, isNewEssayDone, markNewEssayDone, useLeaveFinishedFl
 import { getRegenResult, putRegenResult } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { useDirectStart } from "@/components/newEssay/useDirectStart";
 
 const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
 
@@ -64,7 +65,11 @@ interface NewInfo {
  *   브라우저 뒤로 가기는 그대로 이전 화면
  * - 처음 만들기 성공 → 'newEssayDone:{f}'. 뒤로 가기로 다시 열었을 때 처음 만들기는 그 흐름이 끝났으면,
  *   다시 만들기는 그 글의 글 상세(L120)를 연 적이 있으면 내 서재로 (목록 7번)
- * - 실패: AI 실패·시간 초과·연결 → [다시 시도](같은 옵션·같은 토큰) / 하루 한도 → 안내 + [돌아가기]
+ * - 고른 소재 요약 (목록 5번): 접힌 줄 '고른 소재 N개', 펼치면 소재 제목들 + 방향이 있을 때만 '방향: …'
+ * - 실패: AI 실패·시간 초과·연결 → [다시 시도](같은 옵션·같은 토큰)
+ * - 하루 한도 (목록 13번): '오늘 사용할 수 있는 횟수를 다 썼어요' + '내일 다시 만들 수 있어요. 지금은 직접 써 볼 수 있어요.'
+ *   주 버튼 [직접 쓰기] → N140 (m·s·from·f 그대로, 직접 쓰기 임시 저장이 있으면 H121) / 보조 [돌아가기].
+ *   다시 만들기 모드는 '내일 다시 만들 수 있어요.' + [돌아가기]만
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + 주소 검색값)
  */
@@ -91,6 +96,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
   const [style, setStyle] = useState<Style | null>(null);
   const [length, setLength] = useState<EssayLength | null>(null);
   const [phase, setPhase] = useState<Phase>("choose");
+  const direct = useDirectStart();
 
   /** 처음 누를 때 하나, [다시 시도]에도 같은 값 */
   const saveToken = useRef<string | null>(null);
@@ -256,11 +262,24 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
       <>
         {header}
         <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-          <p className="text-[15px] font-semibold">{LIMIT_MESSAGE}</p>
-          <Button variant="secondary" onClick={() => router.back()}>
-            돌아가기
-          </Button>
+          <div>
+            <p className="text-[15px] font-semibold">{LIMIT_MESSAGE}</p>
+            <p className="mt-1 text-sm leading-relaxed text-ink-soft">
+              {regenMode ? "내일 다시 만들 수 있어요." : "내일 다시 만들 수 있어요. 지금은 직접 써 볼 수 있어요."}
+            </p>
+          </div>
+          <div className="flex w-full max-w-xs flex-col gap-2">
+            {!regenMode && (
+              <Button block loading={direct.checking} onClick={() => void direct.start(params)}>
+                직접 쓰기
+              </Button>
+            )}
+            <Button block variant={regenMode ? "secondary" : "ghost"} onClick={() => router.back()}>
+              돌아가기
+            </Button>
+          </div>
         </section>
+        {direct.dialog}
       </>
     );
   }
@@ -315,7 +334,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
         ) : (
           <section className="rounded-xl bg-subtle px-4 py-3 text-sm">
             <button type="button" aria-expanded={infoOpen} onClick={() => setInfoOpen((o) => !o)} className="flex w-full items-center justify-between font-semibold">
-              고른 소재 {info.materialIds.length}개 · 방향 {info.direction ? "있음" : "없음"}
+              고른 소재 {info.materialIds.length}개
               <span aria-hidden>{infoOpen ? "▴" : "▾"}</span>
             </button>
             {infoOpen && (
