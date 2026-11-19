@@ -1,5 +1,7 @@
 """R27 소재함과 소재 관리 (M110, M120 보관, M130, M131, M132)."""
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -264,10 +266,40 @@ def test_reanalyze_empty_or_failed_keeps_material(client, make_user, ai, shown):
 # ---------------------------------------------------------------------------
 # M131 소재 삭제 / M132 기록 삭제
 # ---------------------------------------------------------------------------
-def test_delete_material_is_logical(client, make_user, owner):
+def essay_with(client, uid, material_id):
+    return client.post("/essays", headers=auth(uid), json={
+        "body": "본문입니다.", "material_ids": [material_id], "save_token": str(uuid.uuid4())})
+
+
+def test_delete_unused_material_removes_the_original(client, make_user, owner):
+    """팀 결정 (11/19): 글에 안 쓴 소재는 원본 기록까지 실제로 지운다."""
     a = make_user()
     rec, m = confirmed(client, a)
-    assert client.delete(f"/materials/{m['id']}", headers=auth(a)).status_code == 204
+    r = client.delete(f"/materials/{m['id']}", headers=auth(a))
+    assert r.status_code == 200 and r.json() == {"record_deleted": True}
+
+    assert detail(client, a, m["id"]).status_code == 404
+    b = box(client, a)
+    assert b["materials"] == [] and b["pending"] == [] and b["kept_originals"] == []
+    left = owner.execute(
+        "select (select count(*) from records where id = %(r)s) "
+        "     + (select count(*) from materials where id = %(m)s) "
+        "     + (select count(*) from material_topics where material_id = %(m)s) "
+        "     + (select count(*) from ai_requests where target_id = %(r)s) as n",
+        {"r": rec["id"], "m": m["id"]}).fetchone()["n"]
+    assert left == 0
+    assert owner.execute("select count(*) n from events where record_id = %s",
+                         (rec["id"],)).fetchone()["n"] == 0  # 이벤트는 남고 record_id만 비움
+    assert client.get(f"/records/{rec['id']}/original", headers=auth(a)).status_code == 404
+
+
+def test_delete_used_material_is_logical(client, make_user, owner):
+    """글에 쓴 소재 (직접 쓰기 임시 저장 포함)는 숨기기만 한다 (ERD rule 7)."""
+    a = make_user()
+    rec, m = confirmed(client, a)
+    assert essay_with(client, a, m["id"]).status_code == 201
+    r = client.delete(f"/materials/{m['id']}", headers=auth(a))
+    assert r.status_code == 200 and r.json() == {"record_deleted": False}
 
     assert detail(client, a, m["id"]).status_code == 404
     b = box(client, a)
@@ -283,6 +315,14 @@ def test_delete_material_is_logical(client, make_user, owner):
               client.delete(f"/records/{rec['id']}", headers=auth(a))):
         assert r.status_code == 409 and r.json()["detail"] == "material_deleted"
     assert box(client, a)["kept_originals"] == []
+
+
+def test_material_in_a_direct_draft_counts_as_used(client, make_user):
+    a = make_user()
+    _, m = confirmed(client, a)
+    client.post("/essays/draft", headers=auth(a), json={"body": "쓰는 중", "material_ids": [m["id"]]})
+    r = client.delete(f"/materials/{m['id']}", headers=auth(a))
+    assert r.json() == {"record_deleted": False}
 
 
 def test_nothing_found_original_can_be_deleted(client, make_user):

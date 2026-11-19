@@ -43,6 +43,7 @@ from app.routers.essays import (
     _after_save,
     _essay,
     _insert_version,
+    _lock_usable_materials,
     _version_by_token,
     in_length_range,
 )
@@ -237,12 +238,24 @@ async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response
     inp = _draft_input(materials, data.direction or None, data.style, data.length)
     out, used, tokens_in, tokens_out = await _run(user, req["id"], ai, inp)
 
+    gone = False
     async with user_tx(user.id) as conn:
-        if not await _close_ok(conn, req["id"], tokens_in, tokens_out):
+        if not await _lock_usable_materials(conn, ids):
+            # a material was deleted (M131) during the AI call: keep nothing
+            gone = True
+            await conn.execute(
+                "update ai_requests set status = 'discarded', finished_at = now(), "
+                "input_tokens = %s, output_tokens = %s where id = %s and status = 'running'",
+                (tokens_in, tokens_out, req["id"]))
+            essay = None
+        elif not await _close_ok(conn, req["id"], tokens_in, tokens_out):
             essay = None
         else:
             essay = await _save_first_draft(conn, essay_id, ids, data, out, used, materials,
                                             req["id"])
+    if gone:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="material_not_available")
     if essay is None:
         raise _ai_failed()
     return essay

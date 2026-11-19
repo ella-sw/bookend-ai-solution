@@ -299,3 +299,24 @@ def test_result_based_on_deleted_version_cannot_be_saved(client, make_user):
     again = client.post(f"/essays/{e['id']}/regenerate", headers=auth(a), json={
         "based_on_request_id": r["request_id"], "style": "감성적", "length": "short"})
     assert again.status_code == 404 and again.json()["detail"] == "version_not_found"
+
+
+def test_material_deleted_during_the_ai_call(client, make_user, owner):
+    """AI가 쓰는 동안 소재가 지워지면 (M131) 글을 만들지 않고 422 material_not_available."""
+    a = make_user()
+    m = material(client, a)
+
+    class DeletingAI(RecordingAI):
+        async def write_essay(self, inp):
+            with psycopg.connect(TEST_URL, autocommit=True) as c:  # unused → record deleted
+                c.execute("delete from records where id = "
+                          "(select record_id from materials where id = %s)", (m,))
+            return await super().write_essay(inp)
+
+    use_ai(DeletingAI())
+    r = draft(client, a, [m])
+    assert r.status_code == 422 and r.json()["detail"] == "material_not_available"
+    assert count(owner, "select count(*) n from essays where user_id = %s", a) == 0
+    assert count(owner, "select count(*) n from ai_requests where user_id = %s "
+                        "and kind = 'draft' and status = 'discarded'", a) == 1
+

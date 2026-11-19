@@ -151,17 +151,26 @@ def _check_body(body: str) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty_body")
 
 
+async def _lock_usable_materials(conn: AsyncConnection, ids: list[UUID]) -> bool:
+    """True if every id is the caller's confirmed, not-deleted material. The rows are
+    locked (for share) until commit, so DELETE /materials/{id} can't remove one while the
+    essay_materials links are being written: it waits, then sees the link and only hides
+    the material (M131)."""
+    if not ids:
+        return True
+    rows = await (await conn.execute(
+        "select id from materials where id = any(%s) and user_id = auth.uid() "
+        "and confirmed_at is not null and deleted_at is null for share",
+        (ids,),
+    )).fetchall()
+    return len(rows) == len(ids)
+
+
 async def _check_refs(conn: AsyncConnection, data: DraftIn) -> list[UUID]:
     ids = list(dict.fromkeys(data.material_ids))
-    if ids:
-        n = await (await conn.execute(
-            "select count(*) n from materials where id = any(%s) and user_id = auth.uid() "
-            "and confirmed_at is not null and deleted_at is null",
-            (ids,),
-        )).fetchone()
-        if n["n"] != len(ids):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
-                                detail="material_not_available")
+    if not await _lock_usable_materials(conn, ids):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="material_not_available")
     if data.suggestion_id is not None and await (await conn.execute(
             "select 1 from suggestions where id = %s and user_id = auth.uid()",
             (data.suggestion_id,))).fetchone() is None:

@@ -593,19 +593,39 @@ async def dismiss_reanalysis(material_id: UUID, user: User) -> MaterialDetail:
         return await _detail(conn, material_id)
 
 
-@router.delete("/materials/{material_id}", status_code=status.HTTP_204_NO_CONTENT)
+class MaterialDeleted(BaseModel):
+    record_deleted: bool = Field(
+        description="true = 글에 안 쓴 소재라 원본 기록까지 지움 / false = 글에 쓴 소재라 숨기기만 함")
+
+
+@router.delete("/materials/{material_id}", response_model=MaterialDeleted,
+               responses={404: {"description": "material_not_found"}})
 async def delete_material(material_id: UUID, user: User, background: BackgroundTasks,
-                          suggest_ai: SuggestAIDep) -> Response:
-    """M131 소재 삭제: 논리 삭제 (ERD rule 7). 원본 기록과 이미 쓴 글은 남고, 글에는
-    '삭제된 소재'로 표시된다. 새 제안·새 글·다시 만들기에는 쓰지 않는다."""
+                          suggest_ai: SuggestAIDep) -> MaterialDeleted:
+    """M131 소재 삭제 (팀 결정 11/19, 수정 대기 목록 22번 일부 변경).
+
+    - 글에 안 쓴 소재 (essay_materials 연결 없음): 원본 기록까지 실제로 지운다. 문답·소재·
+      주제·관련 AI 요청도 같이 지워지고 이벤트의 record_id는 비워진다.
+    - 글에 쓴 소재 (직접 쓰기 임시 저장 포함): 지금처럼 숨기기만 한다 (ERD rule 7). 원본과
+      이미 쓴 글은 남고, 글에는 '삭제된 소재'로 표시된다.
+    둘 다 그 소재가 들어 있던 주제의 제안을 다시 계산한다 (R30)."""
     async with user_tx(user.id) as conn:
         await require_consent(conn)
-        await _live_material(conn, material_id, lock=True)
+        m = await _live_material(conn, material_id, lock=True)
         topics = await _topics_of(conn, material_id)
-        await conn.execute("update materials set deleted_at = now() where id = %s",
-                           (material_id,))
+        used = await (await conn.execute(
+            "select 1 from essay_materials where material_id = %s limit 1",
+            (material_id,))).fetchone() is not None
+        if used:
+            await conn.execute("update materials set deleted_at = now() where id = %s",
+                               (material_id,))
+        else:
+            await conn.execute(
+                "delete from ai_requests where target_type = 'record' and target_id = %s",
+                (m["record_id"],))
+            await conn.execute("delete from records where id = %s", (m["record_id"],))
     _recompute(background, user.id, topics, suggest_ai)  # R30: its topics lose a material
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return MaterialDeleted(record_deleted=not used)
 
 
 # ---------------------------------------------------------------------------
