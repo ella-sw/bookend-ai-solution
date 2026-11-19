@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ButtonLink, Loading, RetryNotice, ScreenHeader } from "@/components/ui";
 import { getEssays, type EssayCard } from "@/lib/api";
 import { formatMonthDay } from "@/lib/format";
+import { inExitChain, markTraversalHandled, openedByHistoryTraversal, skipBack } from "@/lib/navDirection";
 import { newEssayHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -17,9 +18,16 @@ const METHOD_LABEL: Record<EssayCard["method"], string> = { direct: "직접 쓰�
  * - 카드: 제목(없으면 '(제목 없음)'), '직접 쓰기/AI 초안 · {상태} · M.DD · 소재 N개'
  * - 임시 저장 → N140 이어 쓰기, 나머지 → L120
  * - 빈 상태: '아직 쓴 글이 없어요' + [새 글 쓰기]
+ * - 끝난 글쓰기 흐름·글 상세에서 이 화면으로 바꿔 온 뒤(목록 7번) 뒤로 가기로 또 내 서재에 닿으면
+ *   같은 화면이 두 번 보이지 않게 한 칸 더 뒤로 간다 (lib/navDirection.ts의 나가는 중 표시)
  * 화면에 다시 올 때마다 새로 불러온다
  */
 export default function LibraryScreen() {
+  useEffect(() => {
+    if (!openedByHistoryTraversal() || !inExitChain() || window.history.length <= 1) return;
+    markTraversalHandled();
+    skipBack();
+  }, []);
   const goOnboardingIfNeeded = useOnboardingRedirect();
   const [essays, setEssays] = useState<EssayCard[] | null>(null);
   const [failed, setFailed] = useState(false);

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BottomActionBar, BottomActionBarSpacer, Button, Loading, RetryNotice, ScreenHeader, useToast } from "@/components/ui";
 import { getMaterialBox, getSuggestion, type MaterialCard } from "@/lib/api";
+import { isNewEssayDone, newFlowId, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { newEssayHref, readNewEssayParams, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -16,6 +17,8 @@ import { useDirectStart } from "./useDirectStart";
  * - s가 있으면 제안의 '글의 방향'을 읽기 전용으로. 없으면 방향 영역 없음
  * - 소재 0개: [AI로 초안 만들기] 막고 '소재를 1개 이상 골라 주세요'. [직접 쓰기]는 됨
  * - 빼거나 정리한 값은 주소(m·s)에도 바로 반영 → 새로고침해도 유지
+ * - 흐름 id(f): 없으면(홈 제안 카드·N130에서 바로 옴) 만들어 주소에 붙인다. 다음 화면으로 그대로 넘김.
+ *   이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId). 주소만 바꾸는 갱신에서는 그대로
  */
@@ -24,12 +27,16 @@ export default function DirectionScreen() {
   const search = useSearchParams();
   // 새로 들어올 때(bfcacheId가 바뀔 때)의 주소 값으로 시작한다.
   // 이 화면이 주소를 바꾸는(replace) 동안에는 bfcacheId가 그대로라 다시 시작하지 않는다
-  const [snapshot, setSnapshot] = useState(() => ({ id: bfcacheId, params: readNewEssayParams(search) }));
-  if (snapshot.id !== bfcacheId) setSnapshot({ id: bfcacheId, params: readNewEssayParams(search) });
-  return <Direction key={snapshot.id} initial={snapshot.params} />;
+  const [snapshot, setSnapshot] = useState(() => ({ id: bfcacheId, params: withFlowId(readNewEssayParams(search)) }));
+  if (snapshot.id !== bfcacheId) setSnapshot({ id: bfcacheId, params: withFlowId(readNewEssayParams(search)) });
+  return <Direction key={snapshot.id} initial={snapshot.params} urlHasFlow={search.has("f")} />;
 }
 
-function Direction({ initial }: { initial: NewEssayParams }) {
+/** 흐름 id가 없으면 새로 만든다 (주소에는 Direction이 붙임) */
+const withFlowId = (params: NewEssayParams): NewEssayParams => (params.f ? params : { ...params, f: newFlowId() });
+
+function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlow: boolean }) {
+  useLeaveFinishedFlow(() => isNewEssayDone(initial.f));
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
@@ -47,6 +54,11 @@ function Direction({ initial }: { initial: NewEssayParams }) {
     setParams(next);
     router.replace(newEssayHref(routes.newDirection, next), { scroll: false });
   };
+
+  // 주소에 흐름 id가 없으면 붙인다 (방문 기록은 늘리지 않음)
+  useEffect(() => {
+    if (!urlHasFlow) router.replace(newEssayHref(routes.newDirection, initial), { scroll: false });
+  }, [urlHasFlow, initial, router]);
 
   useEffect(() => {
     let cancelled = false;

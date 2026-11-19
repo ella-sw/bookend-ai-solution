@@ -26,6 +26,7 @@ import {
   type EssayDraft,
   type SaveEssayDraftInput,
 } from "@/lib/api";
+import { isNewEssayDone, markNewEssayDone, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { readNewEssayParams, writingStartedProps, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -102,6 +103,7 @@ function fromDraft(d: EssayDraft): Context {
  *   그 밖의 실패는 입력 유지 + [다시 시도](같은 토큰)
  * - 나가기 확인 (useLeaveGuard): 바뀐 게 없으면 바로 나감
  * - 들어올 때마다 1번 writing_started (write_mode = direct, entry_path = from)
+ * - 첫 저장 성공 → 'newEssayDone:{f}' (목록 7번). 새로 쓰기(resume 아님)를 뒤로 가기로 다시 열었는데 그 흐름이 끝났으면 내 서재로
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + 주소 검색값)
  */
@@ -115,6 +117,7 @@ export default function DirectWriterScreen() {
 }
 
 function DirectWriter({ params, resume }: { params: NewEssayParams; resume: boolean }) {
+  useLeaveFinishedFlow(() => !resume && isNewEssayDone(params.f));
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
@@ -224,6 +227,7 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
       res = await saveEssay(input);
     }
     if (res.ok) {
+      if (params.f) markNewEssayDone(params.f);
       leave(routes.essay(res.data.id)); // 이동하는 동안 막힌 채로 둔다
       return;
     }

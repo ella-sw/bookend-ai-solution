@@ -28,6 +28,8 @@ import {
   type Essay,
   type Version,
 } from "@/lib/api";
+import { markEssayDetailSeen, useExitToLibrary } from "@/lib/finishedFlow";
+import { startExitChain } from "@/lib/navDirection";
 import { regenStyleHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -49,6 +51,8 @@ const titleOrNull = (title: string) => (title.trim() ? title.trim() : null);
  * - L123 (목록 2·13·15번): 보고 있는 버전의 제목 + 빈 줄 + 본문.
  *   [복사] 성공 → '복사했어요' + body_shared(copy). [다른 앱으로 공유]는 navigator.share가 있을 때만,
  *   오류 없이 끝나면 body_shared(share_sheet). 취소(AbortError)·실패는 기록하지 않음
+ * - 헤더 [뒤로]는 항상 내 서재(L110)로 바꿔 간다 (replace). 편집 중이면 고친 게 있을 때 확인 뒤 (목록 7번)
+ * - 열면 'essayDetailSeen:{essayId}' → 뒤로 가기로 이 글의 W330·W310(다시 만들기)·W340에 가면 내 서재로
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + essayId)
  */
@@ -62,6 +66,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
+  const exitToLibrary = useExitToLibrary();
   const [essay, setEssay] = useState<Essay | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -104,6 +109,11 @@ function EssayDetail({ essayId }: { essayId: string }) {
     },
     [goOnboardingIfNeeded, router, toast],
   );
+
+  // 이 글의 글쓰기 흐름은 끝남 (목록 7번)
+  useEffect(() => {
+    markEssayDetailSeen(essayId);
+  }, [essayId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,9 +246,15 @@ function EssayDetail({ essayId }: { essayId: string }) {
     toast("지우지 못했어요");
   };
 
+  /** 편집을 그만두고 내 서재로 (나가기 확인의 기록도 걷어 낸다) */
+  const leaveToLibrary = () => {
+    startExitChain();
+    leave(routes.library);
+  };
+
   const requestExit = () => {
     if (dirty) setLeaveOpen(true);
-    else leave();
+    else leaveToLibrary();
   };
 
   /* ---------- 화면 ---------- */
@@ -246,7 +262,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   if (loadFailed && !essay) {
     return (
       <>
-        <ScreenHeader title="글 상세" back />
+        <ScreenHeader title="글 상세" back onBack={exitToLibrary} />
         <div className="px-5 pt-6">
           <RetryNotice message="연결이 불안정해요" onRetry={() => setAttempt((n) => n + 1)} />
         </div>
@@ -257,7 +273,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   if (!essay || !version) {
     return (
       <>
-        <ScreenHeader title="글 상세" back />
+        <ScreenHeader title="글 상세" back onBack={exitToLibrary} />
         <Loading fullScreen />
       </>
     );
@@ -282,6 +298,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
         <ScreenHeader
           title="글 상세"
           back
+          onBack={exitToLibrary}
           right={
             <button
               type="button"
@@ -505,7 +522,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
           setLeaveOpen(false);
           if (leaveChosen.current) {
             leaveChosen.current = false;
-            leave();
+            leaveToLibrary();
           }
         }}
         title="고친 내용은 저장되지 않아요"

@@ -39,8 +39,8 @@ export function useDirectStart() {
       router.push(fresh);
       return;
     }
-    // 이어 쓰기는 임시 저장의 값을 쓰고, 들어온 경로(from)만 넘긴다 (writing_started)
-    const resume = newEssayHref(routes.newDirect, { from: params.from, resume: "draft" });
+    // 이어 쓰기는 임시 저장의 값을 쓰고, 들어온 경로(from)·흐름 id(f)만 넘긴다 (writing_started, 목록 7번)
+    const resume = newEssayHref(routes.newDirect, { from: params.from, f: params.f, resume: "draft" });
     setConfirm({ fresh, resume });
   };
 

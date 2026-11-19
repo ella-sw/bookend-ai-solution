@@ -27,6 +27,7 @@ import {
   type NewEssayParams,
   type RegenBaseParam,
 } from "@/lib/newEssayParams";
+import { isEssayDetailSeen, isNewEssayDone, markNewEssayDone, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { getRegenResult, putRegenResult } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -59,6 +60,10 @@ interface NewInfo {
  * - 다시 만들기 (?regen={essayId}&version=… 또는 &request=…): 처음 고른 소재로 [다시 만들기] → W340.
  *   보던 글의 문체·길이를 미리 골라 둔다 (값이 없으면(직접 쓴 글) 고르지 않음, 28번 미정)
  * - 만드는 동안 화면 전체를 덮고 다른 조작(뒤로가기 포함)을 막는다
+ * - 헤더 [뒤로]: 길이 단계(W320)에서는 [이전]과 같이 문체 단계로, 문체 단계에서는 이전 화면으로 (목록 11번).
+ *   브라우저 뒤로 가기는 그대로 이전 화면
+ * - 처음 만들기 성공 → 'newEssayDone:{f}'. 뒤로 가기로 다시 열었을 때 처음 만들기는 그 흐름이 끝났으면,
+ *   다시 만들기는 그 글의 글 상세(L120)를 연 적이 있으면 내 서재로 (목록 7번)
  * - 실패: AI 실패·시간 초과·연결 → [다시 시도](같은 옵션·같은 토큰) / 하루 한도 → 안내 + [돌아가기]
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + 주소 검색값)
@@ -73,6 +78,7 @@ export default function AiStyleScreen() {
 }
 
 function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: string; base: RegenBaseParam | null } | null }) {
+  useLeaveFinishedFlow(() => (regen ? isEssayDetailSeen(regen.essayId) : isNewEssayDone(params.f)));
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
@@ -221,6 +227,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
       res = await send();
     }
     if (res.ok) {
+      if (params.f) markNewEssayDone(params.f);
       leave(draftResultHref(routes.draftResult, res.data.id));
       return;
     }
@@ -240,7 +247,9 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     );
   }
 
-  const header = <ScreenHeader title={regenMode ? "다시 만들기" : "AI 초안"} back />;
+  // 길이 단계에서는 헤더 [뒤로]도 [이전]처럼 문체 단계로 (하루 한도 안내에서는 이전 화면으로)
+  const backToStyle = step === 2 && phase !== "limit";
+  const header = <ScreenHeader title={regenMode ? "다시 만들기" : "AI 초안"} back onBack={backToStyle ? () => setStep(1) : undefined} />;
 
   if (phase === "limit") {
     return (

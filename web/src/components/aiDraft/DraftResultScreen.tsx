@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BottomActionBar, BottomActionBarSpacer, Button, Loading, RetryNotice, ScreenHeader, useToast } from "@/components/ui";
 import { getEssay, type Essay } from "@/lib/api";
+import { isEssayDetailSeen, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { regenStyleHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -14,6 +15,7 @@ import { EssayInfoLine, EssayText } from "./EssayView";
  * - getEssay의 마지막 버전을 보여 준다 (처음 만든 뒤면 '초안')
  * - 정보 줄 '초안 · 감성적 · 장문 · 1,180자 · 소재 3개' (범위 밖이면 '목표 범위 밖')
  * - [다시 만들기] → W310 다시 만들기 모드 (이 버전 바탕) / [내 서재로] → 글 상세(L120)
+ * - 뒤로 가기로 다시 열었는데 이 글의 글 상세(L120)를 연 적이 있으면 내 서재로 (목록 7번)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + essay)
  */
@@ -24,6 +26,7 @@ export default function DraftResultScreen() {
 }
 
 function DraftResult({ essayId }: { essayId: string }) {
+  useLeaveFinishedFlow(() => isEssayDetailSeen(essayId));
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();

@@ -32,6 +32,7 @@ import {
   type DailyQuestions,
   type QnaState,
 } from "@/lib/api";
+import { loadQnaInput, removeQnaInput, storeQnaInput } from "@/lib/qnaInputStore";
 import { routes, type ResumeMode } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useLeaveGuard } from "./useLeaveGuard";
@@ -86,6 +87,9 @@ async function loadInitial(resume: ResumeMode | null): Promise<Initial> {
  * - W211 (헤더 [나가기]·‹·브라우저/휴대폰 뒤로가기): 첫 답변 전 [나가기]/[계속 쓰기],
  *   첫 답변 뒤 [임시 저장하고 나가기]/[저장하지 않고 나가기]/[계속 쓰기].
  *   이어 쓰던 draft를 열고 아무것도 안 바꿨으면 팝업 없이 나감
+ * - 보내지 않은 답변 (목록 9번): 첫 답변 뒤 입력칸 내용을 localStorage 'qnaInput:{record_id}'에 입력할 때마다 둔다.
+ *   같은 대화를 다시 열면(이어 쓰기·진행 중 대화) 입력칸에 채운다. 채운 그대로면 바뀐 것으로 보지 않는다.
+ *   지우는 때: 답변 보내기 성공, [소재로 저장] 성공, [저장하지 않고 나가기], 모든 기록 지우기(S120)
  * - 기록 시작 이벤트: 화면에 들어올 때마다 1번 (이어서 열면 record_id, 목록 23·24번)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + resume, W110과 같은 이유: cacheComponents의 Activity)
@@ -109,6 +113,8 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   /** 첫 답변 뒤: 서버가 준 대화 상태 */
   const [qna, setQna] = useState<QnaState | null>(null);
   const [input, setInput] = useState("");
+  /** 다시 열 때 채운 보내지 않은 답변 (그대로면 바뀐 것이 아님) */
+  const [restoredInput, setRestoredInput] = useState("");
   /** 보내는 중인 답변 (응답 전까지 말풍선으로 보여 줌) */
   const [sendingAnswer, setSendingAnswer] = useState<string | null>(null);
   /** 다음 질문 다시 받는 중 */
@@ -158,6 +164,10 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
       if (result.type === "chat") {
         openedRecordId.current = result.qna.record_id;
         setSavedUpdatedAt(result.qna.updated_at);
+        // 보내지 않은 답변을 입력칸에 되살린다 (목록 9번)
+        const restored = loadQnaInput(result.qna.record_id);
+        setInput(restored);
+        setRestoredInput(restored);
       }
       applyInitial(result);
     });
@@ -168,7 +178,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
 
   /* ---------- 나가기 확인 (W211) ---------- */
 
-  const typed = input.trim() !== "";
+  const typed = input.trim() !== "" && input !== restoredInput;
   const dirty =
     phase === "ready" &&
     (qna === null ? typed : qna.status === "active" || qna.updated_at !== savedUpdatedAt || typed);
@@ -238,10 +248,12 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
     busy.current = false;
     setSendingAnswer(null);
     if (res.ok) {
+      removeQnaInput(res.data.record_id);
+      setRestoredInput("");
       setQna(res.data);
       return;
     }
-    setInput(answer); // 보내지 못한 답변은 입력창에 되돌림
+    setInput(answer); // 보내지 못한 답변은 입력창에 되돌림 (보관한 것도 그대로)
     if (!qna && res.error.code === "invalid_daily_question") {
       // 날짜가 바뀌어 오늘 질문이 달라짐 → 다시 받기
       const fresh = await getTodayQuestions();
@@ -311,6 +323,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
     setSaveFailed(false);
     const res = await saveQna(qna.record_id);
     if (res.ok) {
+      removeQnaInput(qna.record_id);
       // 이동하는 동안 막힌 채로 둔다
       leave(routes.materialReview(res.data.id));
       return;
@@ -335,7 +348,10 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
     if (choice === "saveAndLeave" && (await saveDraft())) leave();
     if (choice === "discardAndLeave") {
       // 실패해도 나간다: active는 1시간 뒤 서버가 지우고, draft는 다음에 열 때 되돌린다
-      if (qna) await (qna.status === "active" ? discardQna(qna.record_id) : discardQnaChanges(qna.record_id));
+      if (qna) {
+        removeQnaInput(qna.record_id);
+        await (qna.status === "active" ? discardQna(qna.record_id) : discardQnaChanges(qna.record_id));
+      }
       leave();
     }
   };
@@ -532,7 +548,11 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
             >
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  // 첫 답변 전(대화 id 없음)의 입력은 두지 않는다
+                  if (qna) storeQnaInput(qna.record_id, e.target.value);
+                }}
                 maxLength={ANSWER_MAX}
                 rows={1}
                 disabled={!canType}
