@@ -86,7 +86,7 @@ async function loadInitial(resume: ResumeMode | null): Promise<Initial> {
  * - [소재로 저장]: can_save가 false면 회색 + '질문에 하나만 더 답해 주세요' (목록 3번). 하루 한도·AI 실패로
  *   입력이 잠기면 이 안내는 숨긴다 (목록 12번)
  * - W212 (finished): 마무리 말, 입력·다른 질문 보기 막음, [소재로 저장] 강조
- * - [임시 저장]: 첫 답변 뒤에만 → W111. [소재로 저장]: saveQna → M120, 실패하면 [다시 시도]
+ * - [임시 저장]: 첫 답변 뒤에만 → '임시 저장했어요' 토스트. [소재로 저장]: saveQna → M120, 실패하면 [다시 시도]
  * - W211 (헤더 [나가기]·‹·브라우저/휴대폰 뒤로가기): 첫 답변 전 [나가기]/[계속 쓰기],
  *   첫 답변 뒤 [임시 저장하고 나가기]/[저장하지 않고 나가기]/[계속 쓰기].
  *   이어 쓰던 draft를 열고 아무것도 안 바꿨으면 팝업 없이 나감
@@ -127,7 +127,6 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
   const [savingDraft, setSavingDraft] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
-  const [draftSavedOpen, setDraftSavedOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
   /** 마지막으로 불러오거나 임시 저장했을 때의 updated_at (draft의 바뀜 여부) */
   const [savedUpdatedAt, setSavedUpdatedAt] = useState<string | null>(null);
@@ -415,7 +414,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
               loading={savingDraft}
               disabled={!qna || thinking || replacing || savingRecord}
               onClick={async () => {
-                if (await saveDraft()) setDraftSavedOpen(true);
+                if (await saveDraft()) toast("임시 저장했어요");
               }}
             >
               임시 저장
@@ -608,14 +607,6 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
           </>
         )}
       </BottomActionBar>
-
-      {/* W111 임시 저장됨 */}
-      <ConfirmDialog
-        open={draftSavedOpen}
-        onClose={() => setDraftSavedOpen(false)}
-        title="임시 저장됐습니다."
-        actions={[{ label: "확인", variant: "primary", onClick: () => {} }]}
-      />
 
       {/* W211 나가기 확인. 고른 동작은 팝업이 닫힌 뒤 onExitDialogClosed에서 실행 */}
       <ConfirmDialog

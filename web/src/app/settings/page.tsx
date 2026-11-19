@@ -61,7 +61,7 @@ export default function SettingsPage() {
       <ul className="mt-4 divide-y divide-line border-y border-line">
         <SettingsRow label="이용약관" onClick={() => toast("준비 중이에요")} />
         <SettingsRow label="개인정보 처리방침" onClick={() => toast("준비 중이에요")} />
-        <SettingsRow label="모든 기록 지우기" danger busy={clearing} onClick={() => setConfirmOpen(true)} />
+        <SettingsRow label="모든 기록 삭제" danger busy={clearing} onClick={() => setConfirmOpen(true)} />
       </ul>
 
       {failed && !clearing && (
@@ -84,7 +84,7 @@ export default function SettingsPage() {
         description="소재·글·대화·임시 저장이 모두 지워지고 되돌릴 수 없어요."
         actions={[
           { label: "취소", onClick: () => (clearChosen.current = false) },
-          { label: "지우기", variant: "danger", onClick: () => (clearChosen.current = true) },
+          { label: "삭제", variant: "danger", onClick: () => (clearChosen.current = true) },
         ]}
       />
     </>

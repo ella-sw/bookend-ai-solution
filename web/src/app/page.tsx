@@ -13,10 +13,17 @@ import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 /**
+ * 같은 주제 소재가 이만큼 모이면 서버가 글쓰기 제안을 만든다.
+ * B 설정 suggest_min_records의 기본값 (서버 값이 바뀌면 같이 고친다)
+ */
+const SUGGEST_MIN_RECORDS = 3;
+
+/**
  * H110 홈 (UI 설계서 v7 5쪽, 목록 24번)
  * - 들어오기 전에 EntryGate가 세션·동의를 확인한다 (목록 19번). 확인 전에는 홈을 그리지 않음
  * - [+ 소재 모으기] → H120 시트 (임시 저장이 있으면 H121) / [✎ 새 글 쓰기] → N110 (from = home)
- * - 글쓰기 제안: 계산 중이면 '소재를 정리하고 있어요', 있으면 첫 번째 카드, 없거나 실패면 숨김
+ * - 글쓰기 제안: 계산 중이면 '소재를 정리하고 있어요', 있으면 첫 번째 카드, 실패면 숨김.
+ *   제안이 없고 소재가 1개 이상이면 그 자리에 회색 한 줄 '같은 주제 소재가 3개 모이면 글쓰기 제안을 드려요' (목록 27번)
  * - 최근 소재: 보관한 소재 앞 3개 → M130, [전체 보기 ›] → M110. 0개면 첫 소재 안내 + [소재 모으기]
  * - ?collect=1 (빈 상태의 [소재 모으기], 목록 14번): H120 시트를 연 채로 시작하고 주소에서 그 값을 지운다 (replace)
  * - 들어올 때마다 새로 불러온다 (Activity로 다시 보이면 effect가 다시 돈다)
@@ -125,6 +132,10 @@ function Home({ openCollect }: { openCollect: boolean }) {
         <div className="mt-6 px-5">
           <SuggestionCard suggestion={suggestion} shownIds={shownIds} />
         </div>
+      )}
+      {/* 제안이 아직 없을 때 (불러온 뒤에만, 소재 0개인 빈 상태에는 넣지 않음) */}
+      {suggestions && !suggestions.computing && !suggestion && materials && materials.length > 0 && (
+        <p className="mx-5 mt-6 text-[13px] text-ink-mute">같은 주제 소재가 {SUGGEST_MIN_RECORDS}개 모이면 글쓰기 제안을 드려요</p>
       )}
 
       <section className="mt-8 px-5">

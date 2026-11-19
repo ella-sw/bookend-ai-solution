@@ -57,7 +57,7 @@ export function getEssay(essayId: string) {
 }
 
 /**
- * [에세이 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
+ * [초안 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
  * 201, 같은 save_token이면 200 + 이미 만든 글 (AI를 다시 부르지 않음).
  * 오류: 422 material_not_available, 404 suggestion_not_found, 429 daily_limit, 502 ai_failed
  */

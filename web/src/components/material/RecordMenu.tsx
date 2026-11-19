@@ -20,7 +20,7 @@ export function SheetItem({ label, onClick, danger, disabled }: { label: string;
 
 /**
  * 기록 메뉴 (목록 1·2번): M120 done·failed 헤더 [더보기], M110 확인 대기 카드 [⋯]
- * [기록 지우기]를 고르면 시트가 다 닫힌 뒤 onDelete (다른 팝업이 뒤로가기 기록과 엉키지 않게)
+ * [기록 삭제]를 고르면 시트가 다 닫힌 뒤 onDelete (다른 팝업이 뒤로가기 기록과 엉키지 않게)
  */
 export function RecordMenuSheet({ open, onClose, onDelete }: { open: boolean; onClose: () => void; onDelete: () => void }) {
   const chosen = useRef(false);
@@ -39,7 +39,7 @@ export function RecordMenuSheet({ open, onClose, onDelete }: { open: boolean; on
       {({ close }) => (
         <div className="flex flex-col">
           <SheetItem
-            label="기록 지우기"
+            label="기록 삭제"
             danger
             onClick={() => {
               chosen.current = true;
@@ -52,7 +52,7 @@ export function RecordMenuSheet({ open, onClose, onDelete }: { open: boolean; on
   );
 }
 
-/** 기록 지우기 확인 (M120·M110 같이 씀). [지우기]를 고르면 팝업이 다 닫힌 뒤 onConfirm */
+/** 기록 삭제 확인 (M120·M110 같이 씀). [삭제]를 고르면 팝업이 다 닫힌 뒤 onConfirm */
 export function RecordDeleteDialog({ open, onClose, onConfirm }: { open: boolean; onClose: () => void; onConfirm: () => void }) {
   const chosen = useRef(false);
   return (
@@ -69,13 +69,13 @@ export function RecordDeleteDialog({ open, onClose, onConfirm }: { open: boolean
       description="지운 기록은 되돌릴 수 없어요."
       actions={[
         { label: "취소", onClick: () => (chosen.current = false) },
-        { label: "지우기", variant: "danger", onClick: () => (chosen.current = true) },
+        { label: "삭제", variant: "danger", onClick: () => (chosen.current = true) },
       ]}
     />
   );
 }
 
-/** 기록 지우기 실패 문구 (보관한 소재가 있거나 지운 소재의 원본이면 서버가 막음, 목록 22번) */
+/** 기록 삭제 실패 문구 (보관한 소재가 있거나 지운 소재의 원본이면 서버가 막음, 목록 22번) */
 export function recordDeleteFailMessage(error: ApiError): string {
   if (error.code === "material_confirmed" || error.code === "material_deleted") return "이 기록은 지울 수 없어요";
   if (error.code === "record_not_found") return "기록을 찾을 수 없어요";

@@ -96,7 +96,7 @@ export const screens = [
   { id: "M130", name: "소재 상세", href: routes.material("sample") },
   { id: "M130", name: "보관한 원본", href: routes.keptRecord("sample") },
   { id: "N110", name: "소재 고르기", href: routes.newSelect },
-  { id: "N120", name: "글의 방향 확인", href: routes.newDirection },
+  { id: "N120", name: "고른 소재", href: routes.newDirection },
   { id: "N130", name: "글쓰기 제안 상세", href: routes.suggestion("sample") },
   { id: "N140", name: "직접 쓰기", href: routes.newDirect },
   { id: "W310", name: "AI 초안 · 문체·길이 선택", href: routes.newAiStyle },

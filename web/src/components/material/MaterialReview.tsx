@@ -47,10 +47,10 @@ const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
  *   이미 보관된 소재로 열면 처음부터 보관 완료
  * - 뒤로가기: 고친 내용이 있으면 '고친 내용은 저장되지 않아요' 확인 1번 (보관하지 않은 소재는 확인 대기에 남음)
  * - empty (목록 21번): 안내 + [새로 기록하기]/[새 대화 시작하기](keepOriginal 뒤 새로 시작, 이동 뒤 '이전 기록은 원본만 보관했어요')
- *   + [기록 지우기]. [직접 정리하기]·[다시 분석]·[원본만 보관]은 두지 않음
+ *   + [기록 삭제]. [직접 정리하기]·[다시 분석]·[원본만 보관]은 두지 않음
  * - failed: [다시 분석](can_reanalyze, 하루 한도면 막고 안내) / [직접 정리하기] / [원본만 보관]('소재 없이 원문만 남겨요',
  *   성공하면 '원본만 보관했어요 · 소재함 맨 아래에서 볼 수 있어요', 목록 16번)
- * - done(보관 전)·failed: 헤더 [더보기] → '기록 메뉴' 시트 → [기록 지우기] (목록 1번, M131 더보기와 같은 모양).
+ * - done(보관 전)·failed: 헤더 [더보기] → '기록 메뉴' 시트 → [기록 삭제] (목록 1번, M131 더보기와 같은 모양).
  *   지우기 확인은 세 화면(done·failed·empty)이 같이 쓴다. 성공 → '기록을 지웠어요' + 소재함.
  *   고친 내용이 있어도 지우기 확인 하나만 (지운 뒤 나가기 확인은 다시 뜨지 않음)
  *
@@ -429,7 +429,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
               {restartLabel}
             </Button>
             <Button block variant="ghost" loading={acting === "delete"} disabled={acting !== null} onClick={() => setDeleteOpen(true)}>
-              기록 지우기
+              기록 삭제
             </Button>
           </div>
         </BottomActionBar>

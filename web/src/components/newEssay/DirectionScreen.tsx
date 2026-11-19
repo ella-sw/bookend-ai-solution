@@ -11,14 +11,14 @@ import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useDirectStart } from "./useDirectStart";
 
 /**
- * N120 글의 방향 확인 (UI 설계서 v7 19쪽 + 목록 20번: 방향 입력칸 없음)
+ * N120 고른 소재 (UI 설계서 v7 19쪽 '글의 방향 확인' + 목록 20번: 방향 입력칸 없음, 목록 26번: 헤더 이름 '고른 소재')
  * - 고른 소재: 고른 순서대로, ×로 빼기
  * - [+ 소재 추가] → '소재 추가' 시트 (목록 4번, N110으로 넘어가지 않음): 불러온 소재 중 고르지 않은 것.
  *   여러 개 체크 → [추가 (n)] → 체크한 순서대로 m 뒤에 붙인다. 최대 ESSAY_RULES.materialsMax개를 넘지 않게 막고 안내.
  *   더 고를 소재가 없으면 버튼을 막고 '더 고를 소재가 없어요'
  *   소재 정보는 소재함(GET /materials)에서 찾는다. 없는 id(삭제됨)는 빼고 '삭제된 소재는 뺐어요'
  * - s가 있으면 제안의 '글의 방향'을 읽기 전용으로. 없으면 방향 영역 없음
- * - 소재 0개: [AI로 초안 만들기] 막고 '소재를 1개 이상 골라 주세요'. [직접 쓰기]는 됨
+ * - 소재 0개: [AI로 초안 만들기] 막고 버튼 위에 '소재를 1개 이상 골라 주세요'. [직접 쓰기]는 됨
  * - 빼거나 정리한 값은 주소(m·s)에도 바로 반영 → 새로고침해도 유지
  * - 흐름 id(f): 없으면(홈 제안 카드·N130에서 바로 옴) 만들어 주소에 붙인다. 다음 화면으로 그대로 넘김.
  *   이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
@@ -98,7 +98,7 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
     };
   }, [attempt, initial, goOnboardingIfNeeded, router, toast]);
 
-  const header = <ScreenHeader title="글의 방향" back />;
+  const header = <ScreenHeader title="고른 소재" back />;
 
   if (failed && !materials) {
     return (
@@ -152,7 +152,6 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
       <div className="flex flex-col gap-6 px-5 pt-5 pb-4">
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold text-ink-soft">고른 소재 {chosen.length}개</h2>
-          {empty && <p className="text-sm text-danger">소재를 1개 이상 골라 주세요</p>}
           {chosen.length > 0 && (
             <ol className="divide-y divide-line rounded-2xl border border-line">
               {chosen.map((m, i) => (
@@ -201,6 +200,8 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
 
       <BottomActionBarSpacer />
       <BottomActionBar>
+        {/* 고른 소재가 없으면 버튼 위에 안내 (목록 21번) */}
+        {empty && <p className="mb-2 text-center text-sm text-danger">소재를 1개 이상 골라 주세요</p>}
         <div className="grid grid-cols-2 gap-2">
           <Button variant="secondary" size="lg" loading={direct.checking} onClick={() => void direct.start(params)}>
             직접 쓰기

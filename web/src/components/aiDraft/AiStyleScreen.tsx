@@ -56,7 +56,7 @@ interface NewInfo {
 
 /**
  * W310 문체 · W320 길이 (한 화면 2단계, UI 설계서 v7 21쪽, 목록 20·24·28번, B ai_essays.py)
- * - 처음 만들기: 고른 소재(m)·제안(s)으로 [에세이 만들기] → W330
+ * - 처음 만들기: 고른 소재(m)·제안(s)으로 [초안 만들기] → W330
  *   writing_started(ai)는 처음 누를 때만 (다시 시도 제외). save_token도 처음 누를 때 하나
  * - 다시 만들기 (?regen={essayId}&version=… 또는 &request=…): 처음 고른 소재로 [다시 만들기] → W340.
  *   보던 글의 문체·길이를 미리 골라 둔다 (값이 없으면(직접 쓴 글) 고르지 않음, 28번 미정)
@@ -248,7 +248,10 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     return (
       <div className="fixed inset-y-0 left-1/2 z-40 flex w-full max-w-(--app-max-width) -translate-x-1/2 flex-col items-center justify-center gap-4 bg-surface px-6 text-center" role="status" aria-live="polite">
         <Spinner className="size-9" />
-        <p className="text-[15px] font-semibold">{regenMode ? "다시 쓰고 있어요…" : "소재를 엮어 글을 쓰고 있어요…"}</p>
+        <div>
+          <p className="text-[15px] font-semibold">{regenMode ? "다시 쓰고 있어요…" : "소재를 엮어 글을 쓰고 있어요…"}</p>
+          {!regenMode && <p className="mt-1 text-sm text-ink-soft">1분쯤 걸릴 수 있어요. 화면을 닫지 말아 주세요.</p>}
+        </div>
       </div>
     );
   }
@@ -347,7 +350,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
         )}
 
         {phase === "failed" && (
-          <RetryNotice message={regenMode ? "다시 만들지 못했어요" : "에세이를 만들지 못했어요"} onRetry={() => void make()} />
+          <RetryNotice message={regenMode ? "다시 만들지 못했어요" : "초안을 만들지 못했어요"} onRetry={() => void make()} />
         )}
 
         {step === 1 ? (
@@ -379,7 +382,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
               이전
             </Button>
             <Button size="lg" disabled={!style || !length} onClick={() => void make()}>
-              {regenMode ? "다시 만들기" : "에세이 만들기"}
+              {regenMode ? "다시 만들기" : "초안 만들기"}
             </Button>
           </div>
         )}

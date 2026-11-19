@@ -25,7 +25,7 @@ const keptOriginalStatus = (label: RecordCard["label"]): MaterialCardStatus =>
 /**
  * M110 소재함 (UI 설계서 v7 13쪽, B GET /materials)
  * 확인 대기 → 임시 저장 기록 → 주제 칩 + 보관한 소재 → 원본만 보관한 기록(접힌 구역)
- * - 확인 대기 카드 오른쪽 [⋯](기록 메뉴) → [기록 지우기] → 확인 → deleteRecord (목록 2번, 분석 중 카드도).
+ * - 확인 대기 카드 오른쪽 [⋯](기록 메뉴) → [기록 삭제] → 확인 → deleteRecord (목록 2번, 분석 중 카드도).
  *   성공: '기록을 지웠어요' + 다시 불러오기. 실패 문구는 M120과 같음
  * - 빈 상태 [소재 모으기] → 홈에서 모으기 방식 고르기(H120)를 바로 연다 (목록 14번)
  * 화면에 다시 올 때마다 새로 불러온다 (cacheComponents의 Activity: 보였다가 숨으면 effect가 다시 돈다)

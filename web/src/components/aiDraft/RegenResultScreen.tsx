@@ -159,7 +159,7 @@ function RegenResultView({ essayId, requestId }: { essayId: string; requestId: n
         />
         {result.deleted_materials_left_out && (
           <p className="rounded-xl bg-subtle px-4 py-3 text-sm leading-relaxed text-ink-soft">
-            삭제한 소재는 새로 넣지 않아요. 지금 글에 있는 내용은 그대로 바탕이 돼요.
+            삭제된 소재는 새로 넣지 않아요. 지금 글에 있는 내용은 그대로 바탕이 돼요.
           </p>
         )}
         <EssayText title={result.title} body={result.body} />

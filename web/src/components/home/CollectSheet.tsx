@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import { BottomSheet, ConfirmDialog, Spinner, useToast } from "@/components/ui";
-import { confirmTargets, decideCollect, type CollectKind } from "@/lib/collectEntry";
+import { confirmTargets, decideCollect, resumeDialogCopy, type CollectKind } from "@/lib/collectEntry";
+import type { IsoTime } from "@/lib/api";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 type SheetControls = { close: () => void; closeAndGo: (href: string) => void };
@@ -20,9 +21,9 @@ export function CollectSheet({ open, onClose }: { open: boolean; onClose: () => 
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
   const [checking, setChecking] = useState<CollectKind | null>(null);
-  const [confirmKind, setConfirmKind] = useState<CollectKind | null>(null);
+  const [confirm, setConfirm] = useState<{ kind: CollectKind; updatedAt: IsoTime } | null>(null);
   /** 시트가 닫히면 열 H121 */
-  const confirmAfterClose = useRef<CollectKind | null>(null);
+  const confirmAfterClose = useRef<{ kind: CollectKind; updatedAt: IsoTime } | null>(null);
   /** 진행 중인 확인 번호. 시트를 닫으면 올려서 늦게 온 결과를 버린다 */
   const runId = useRef(0);
   /** 다시 그려지기 전의 빠른 두 번째 누름도 막는다 */
@@ -34,7 +35,7 @@ export function CollectSheet({ open, onClose }: { open: boolean; onClose: () => 
     setChecking(null);
     onClose();
     if (confirmAfterClose.current) {
-      setConfirmKind(confirmAfterClose.current);
+      setConfirm(confirmAfterClose.current);
       confirmAfterClose.current = null;
     }
   };
@@ -53,7 +54,7 @@ export function CollectSheet({ open, onClose }: { open: boolean; onClose: () => 
       return;
     }
     if (decision.type === "confirm") {
-      confirmAfterClose.current = kind;
+      confirmAfterClose.current = { kind, updatedAt: decision.updatedAt };
       controls.close(); // 닫힘이 끝나면 handleSheetClose가 H121을 연다
       return;
     }
@@ -62,7 +63,8 @@ export function CollectSheet({ open, onClose }: { open: boolean; onClose: () => 
     if (!goOnboardingIfNeeded(decision.error)) toast("연결이 불안정해요");
   };
 
-  const targets = confirmKind ? confirmTargets(confirmKind) : null;
+  const targets = confirm ? confirmTargets(confirm.kind) : null;
+  const copy = resumeDialogCopy(confirm?.kind ?? "free", confirm?.updatedAt ?? null);
 
   return (
     <>
@@ -87,17 +89,17 @@ export function CollectSheet({ open, onClose }: { open: boolean; onClose: () => 
         )}
       </BottomSheet>
 
-      {/* H121 이어 쓰기 확인. [아니오]는 새로 시작 — 임시 저장·진행 중 대화는 건드리지 않음 (⑪) */}
+      {/* H121 이어 쓰기 확인. [새로 시작]은 임시 저장·진행 중 대화를 건드리지 않음 (⑪) */}
       <ConfirmDialog
         open={targets !== null}
-        onClose={() => setConfirmKind(null)}
-        title="작성중인 글이 있습니다."
-        description="이어서 쓰시겠습니까?"
+        onClose={() => setConfirm(null)}
+        title={copy.title}
+        description={copy.description}
         actions={
           targets
             ? [
-                { label: "아니오", navigateTo: targets.fresh },
-                { label: "예", variant: "primary", navigateTo: targets.resume },
+                { label: copy.freshLabel, navigateTo: targets.fresh },
+                { label: copy.resumeLabel, variant: "primary", navigateTo: targets.resume },
               ]
             : []
         }

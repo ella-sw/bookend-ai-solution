@@ -43,7 +43,7 @@ const titleOrNull = (title: string) => (title.trim() ? title.trim() : null);
  * L120 글 상세 + L122 저장 방식 (UI 설계서 v7 25쪽, 목록 22·28번, B essays.py)
  * - 버전 칩(초안·v1·v2…), 처음엔 가장 최근 버전
  * - 사용한 소재 칩 → M130. 삭제된 소재는 '삭제된 소재'로 회색, 누를 수 없음 (22번)
- * - [직접 고치기] → 편집 → [완료] → L122: [저장 후 덮어쓰기] / [새 버전으로 저장 (v{N})] / [취소]
+ * - [직접 고치기] → 편집 → [완료] → L122: [새 버전으로 저장 (v{N})](주 버튼) / [덮어써서 저장] / [취소]
  *   save_token은 편집 시작 때 하나. 실패하면 고친 내용 유지 + '저장하지 못했어요' [다시 시도]
  *   편집 중 뒤로가기: 바뀐 게 있으면 '고친 내용은 저장되지 않아요'
  * - [다시 만들기] → W310 다시 만들기 모드 (보고 있는 버전 바탕)
@@ -101,7 +101,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
     (error: ApiError) => {
       if (goOnboardingIfNeeded(error)) return true;
       if (error.code === "essay_not_found") {
-        toast("이미 삭제한 글이에요");
+        toast("이미 지운 글이에요");
         router.replace(routes.library);
         return true;
       }
@@ -412,26 +412,27 @@ function EssayDetail({ essayId }: { essayId: string }) {
         {({ close }) => (
           <div className="flex flex-col gap-2 pb-3">
             <p className="-mt-2 mb-2 text-sm text-ink-soft">덮어쓰면 {version.label}의 이전 내용은 남지 않아요.</p>
+            {/* 되돌릴 수 있는 새 버전이 주 버튼, 이전 내용이 사라지는 덮어쓰기는 보조 (목록 19번) */}
             <Button
               block
               size="lg"
-              onClick={() => {
-                sheetChoice.current = "overwrite";
-                close();
-              }}
-            >
-              저장 후 덮어쓰기
-            </Button>
-            <Button
-              block
-              size="lg"
-              variant="secondary"
               onClick={() => {
                 sheetChoice.current = "new";
                 close();
               }}
             >
               새 버전으로 저장 (v{nextNo})
+            </Button>
+            <Button
+              block
+              size="lg"
+              variant="secondary"
+              onClick={() => {
+                sheetChoice.current = "overwrite";
+                close();
+              }}
+            >
+              덮어써서 저장
             </Button>
             <Button
               block
@@ -487,7 +488,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
               <button
                 type="button"
                 onClick={() => void share(close)}
-                className="flex flex-col items-start rounded-xl border border-line px-4 py-3 text-left active:bg-subtle"
+                className="flex flex-col items-center rounded-xl border border-line px-4 py-3 text-center active:bg-subtle"
               >
                 <span className="text-[15px] font-semibold">다른 앱으로 공유</span>
                 <span className="text-xs text-ink-mute">카카오톡 · 인스타그램 · 브런치 등</span>
@@ -511,7 +512,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
         description="모든 버전이 지워지고 되돌릴 수 없어요. 사용한 소재는 소재함에 남아요."
         actions={[
           { label: "취소", onClick: () => (deleteChosen.current = false) },
-          { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
+          { label: "삭제", variant: "danger", onClick: () => (deleteChosen.current = true) },
         ]}
       />
 

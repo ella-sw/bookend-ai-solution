@@ -1329,7 +1329,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   // 글 상세 (B essays.py get_essay). 임시 저장은 404
   "essays.get": ({ params }): Essay => essayOf(savedEssay(params.essayId)),
 
-  // [에세이 만들기] (B first_draft): 초안(version 0) 자동 보관. 같은 save_token이면 그 글 (AI 다시 안 부름)
+  // [초안 만들기] (B first_draft): 초안(version 0) 자동 보관. 같은 save_token이면 그 글 (AI 다시 안 부름)
   "essays.ai.create": ({ body, scenario }): Essay => {
     const db = getDb();
     const input = (body ?? {}) as Partial<CreateAiDraftInput>;
