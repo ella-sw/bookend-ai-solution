@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BottomActionBar, BottomActionBarSpacer, Button, Loading, RetryNotice, ScreenHeader, Tag, useToast } from "@/components/ui";
 import { getSuggestion, logEvent, type Suggestion } from "@/lib/api";
-import { newEssayHref } from "@/lib/newEssayParams";
+import { isNewEssayDone, useEnsureFlowId, useLeaveFinishedFlow } from "@/lib/finishedFlow";
+import { newEssayHref, readNewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
@@ -15,15 +16,21 @@ import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
  * - 화면에 보이면 1번 suggestion_shown(placement = suggestion_detail)
  * - [소재 바꾸기] → N110 (제안 소재가 선택된 채) / [이 주제로 글쓰기] → suggestion_selected 1번 → N120
  * - [닫기] → 뒤로 (없으면 홈). 제안·소재는 건드리지 않음
+ * - 흐름 id(?f=): 없으면 만들어 주소에 붙이고 N110·N120으로 넘긴다.
+ *   이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + suggestionId)
  */
 export default function SuggestionDetailScreen({ suggestionId }: { suggestionId: string }) {
   const { bfcacheId } = useRouter();
-  return <SuggestionDetail key={`${bfcacheId}:${suggestionId}`} suggestionId={suggestionId} />;
+  const query = useSearchParams().toString();
+  return <SuggestionDetail key={`${bfcacheId}:${suggestionId}`} suggestionId={suggestionId} query={query} />;
 }
 
-function SuggestionDetail({ suggestionId }: { suggestionId: string }) {
+function SuggestionDetail({ suggestionId, query }: { suggestionId: string; query: string }) {
+  const flowId = readNewEssayParams(new URLSearchParams(query)).f;
+  useLeaveFinishedFlow(() => isNewEssayDone(flowId));
+  useEnsureFlowId(routes.suggestion(suggestionId), query);
   const router = useRouter();
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
@@ -99,7 +106,7 @@ function SuggestionDetail({ suggestionId }: { suggestionId: string }) {
     );
   }
 
-  const params = { m: suggestion.materials.map((m) => m.id), s: suggestion.id, from: "suggestion" as const };
+  const params = { m: suggestion.materials.map((m) => m.id), s: suggestion.id, from: "suggestion" as const, f: flowId };
 
   const writeWithThis = () => {
     // [이 주제로 글쓰기] 1번 (빠른 연속 클릭 제외)

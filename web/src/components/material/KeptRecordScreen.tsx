@@ -244,6 +244,7 @@ function KeptRecord({ recordId }: { recordId: string }) {
       {/* 더보기: [기록 삭제]만. 시트가 닫힌 뒤 확인 창을 연다 */}
       <BottomSheet
         open={sheetOpen}
+        ariaLabel="기록 메뉴"
         onClose={() => {
           setSheetOpen(false);
           if (deleteFromSheet.current) {
@@ -280,7 +281,7 @@ function KeptRecord({ recordId }: { recordId: string }) {
         description="원본과 문답이 지워지고 되돌릴 수 없어요."
         actions={[
           { label: "취소", onClick: () => (deleteChosen.current = false) },
-          { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
+          { label: "삭제", variant: "danger", onClick: () => (deleteChosen.current = true) },
         ]}
       />
     </>

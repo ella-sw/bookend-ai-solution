@@ -26,6 +26,7 @@ import {
   type EssayDraft,
   type SaveEssayDraftInput,
 } from "@/lib/api";
+import { isNewEssayDone, markNewEssayDone, useLeaveFinishedFlow } from "@/lib/finishedFlow";
 import { readNewEssayParams, writingStartedProps, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -97,11 +98,12 @@ function fromDraft(d: EssayDraft): Context {
  * - 참고 소재 칸(접힘 ▾): 고른 소재 제목, 제안의 방향. 소재 없이 왔으면 없음
  * - 제목(100자, 선택)·본문(20,000자)·글자 수(본문만, 공백 포함)
  * - 열 때 save_token 하나. ?resume=draft면 임시 저장을 이어서 (그 essay_id 기억)
- * - [임시 저장] → W111. 404 draft_not_found면 essay_id 없이 한 번 더
+ * - [임시 저장] → '임시 저장했어요' 토스트. 404 draft_not_found면 essay_id 없이 한 번 더
  * - [저장] → v1 → L120. draft_not_found면 essay_id 없이 같은 토큰으로 다시, material_not_available은 안내,
  *   그 밖의 실패는 입력 유지 + [다시 시도](같은 토큰)
  * - 나가기 확인 (useLeaveGuard): 바뀐 게 없으면 바로 나감
  * - 들어올 때마다 1번 writing_started (write_mode = direct, entry_path = from)
+ * - 첫 저장 성공 → 'newEssayDone:{f}' (목록 7번). 새로 쓰기(resume 아님)를 뒤로 가기로 다시 열었는데 그 흐름이 끝났으면 내 서재로
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + 주소 검색값)
  */
@@ -115,6 +117,7 @@ export default function DirectWriterScreen() {
 }
 
 function DirectWriter({ params, resume }: { params: NewEssayParams; resume: boolean }) {
+  useLeaveFinishedFlow(() => !resume && isNewEssayDone(params.f));
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
@@ -128,7 +131,6 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
   const [savingDraft, setSavingDraft] = useState(false);
   const [savingEssay, setSavingEssay] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
-  const [draftSavedOpen, setDraftSavedOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
 
   /** 이어 쓰는 임시 저장 id (임시 저장 성공 때마다 갱신) */
@@ -224,6 +226,7 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
       res = await saveEssay(input);
     }
     if (res.ok) {
+      if (params.f) markNewEssayDone(params.f);
       leave(routes.essay(res.data.id)); // 이동하는 동안 막힌 채로 둔다
       return;
     }
@@ -285,7 +288,7 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
         onBack={requestExit}
         right={
           <Button variant="ghost" className="h-9 px-3 text-sm" loading={savingDraft} disabled={locked} onClick={async () => {
-            if (await saveDraft()) setDraftSavedOpen(true);
+            if (await saveDraft()) toast("임시 저장했어요");
           }}>
             임시 저장
           </Button>
@@ -343,14 +346,6 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
           저장
         </Button>
       </BottomActionBar>
-
-      {/* W111 임시 저장됨 */}
-      <ConfirmDialog
-        open={draftSavedOpen}
-        onClose={() => setDraftSavedOpen(false)}
-        title="임시 저장됐습니다."
-        actions={[{ label: "확인", variant: "primary", onClick: () => {} }]}
-      />
 
       {/* 나가기 확인. 고른 동작은 팝업이 닫힌 뒤 실행 */}
       <ConfirmDialog

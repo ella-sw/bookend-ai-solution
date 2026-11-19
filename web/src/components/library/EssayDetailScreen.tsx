@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import {
   deleteEssay,
+  deleteEssayVersion,
   ESSAY_RULES,
   getEssay,
   logEvent,
@@ -28,6 +29,9 @@ import {
   type Essay,
   type Version,
 } from "@/lib/api";
+import { markEssayDetailSeen, useExitToLibrary } from "@/lib/finishedFlow";
+import { objectParticle } from "@/lib/format";
+import { startExitChain } from "@/lib/navDirection";
 import { regenStyleHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -41,14 +45,20 @@ const titleOrNull = (title: string) => (title.trim() ? title.trim() : null);
  * L120 글 상세 + L122 저장 방식 (UI 설계서 v7 25쪽, 목록 22·28번, B essays.py)
  * - 버전 칩(초안·v1·v2…), 처음엔 가장 최근 버전
  * - 사용한 소재 칩 → M130. 삭제된 소재는 '삭제된 소재'로 회색, 누를 수 없음 (22번)
- * - [직접 고치기] → 편집 → [완료] → L122: [저장 후 덮어쓰기] / [새 버전으로 저장 (v{N})] / [취소]
+ * - [직접 고치기] → 편집 → [완료] → L122: [새 버전으로 저장 (v{N})](주 버튼) / [덮어써서 저장] / [취소]
  *   save_token은 편집 시작 때 하나. 실패하면 고친 내용 유지 + '저장하지 못했어요' [다시 시도]
  *   편집 중 뒤로가기: 바뀐 게 있으면 '고친 내용은 저장되지 않아요'
  * - [다시 만들기] → W310 다시 만들기 모드 (보고 있는 버전 바탕)
- * - ⋯ → L121: [공유하기] → L123 / [글 삭제] (확인 뒤 → L110, 사용한 소재는 소재함에 남음)
+ * - ⋯ → L121: [공유하기] → L123 / [이 버전 삭제] / [글 삭제] (확인 뒤 → L110, 사용한 소재는 소재함에 남음)
+ *   [이 버전 삭제] (B delete_version): 보고 있는 버전이 초안이거나 버전이 1개뿐이면 숨김.
+ *   확인 '{label}을 지울까요?' → 성공하면 받은 글로 다시 그리고 남은 버전 중 가장 큰 번호를 고름 + '{label}을 지웠어요'.
+ *   실패: version_not_deletable '이 버전은 지울 수 없어요' / version_not_found 다시 불러오기 + '이미 지운 버전이에요' /
+ *   essay_not_found 등 공통 오류는 handleCommonError / 그 밖 '지우지 못했어요' 
  * - L123 (목록 2·13·15번): 보고 있는 버전의 제목 + 빈 줄 + 본문.
  *   [복사] 성공 → '복사했어요' + body_shared(copy). [다른 앱으로 공유]는 navigator.share가 있을 때만,
  *   오류 없이 끝나면 body_shared(share_sheet). 취소(AbortError)·실패는 기록하지 않음
+ * - 헤더 [뒤로]는 항상 내 서재(L110)로 바꿔 간다 (replace). 편집 중이면 고친 게 있을 때 확인 뒤 (목록 7번)
+ * - 열면 'essayDetailSeen:{essayId}' → 뒤로 가기로 이 글의 W330·W310(다시 만들기)·W340에 가면 내 서재로
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + essayId)
  */
@@ -62,6 +72,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   const toast = useToast();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
+  const exitToLibrary = useExitToLibrary();
   const [essay, setEssay] = useState<Essay | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -84,7 +95,11 @@ function EssayDetail({ essayId }: { essayId: string }) {
 
   // L121 더보기 · L123 공유 · 글 삭제
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreChoice = useRef<"share" | "delete" | null>(null);
+  const moreChoice = useRef<"share" | "deleteVersion" | "delete" | null>(null);
+  /** 지우기 확인 중인 버전 (메뉴를 연 때 보고 있던 것) */
+  const [versionToDelete, setVersionToDelete] = useState<Version | null>(null);
+  const versionDeleteChosen = useRef(false);
+  const [deletingVersion, setDeletingVersion] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -96,7 +111,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
     (error: ApiError) => {
       if (goOnboardingIfNeeded(error)) return true;
       if (error.code === "essay_not_found") {
-        toast("이미 삭제한 글이에요");
+        toast("이미 지운 글이에요");
         router.replace(routes.library);
         return true;
       }
@@ -104,6 +119,11 @@ function EssayDetail({ essayId }: { essayId: string }) {
     },
     [goOnboardingIfNeeded, router, toast],
   );
+
+  // 이 글의 글쓰기 흐름은 끝남 (목록 7번)
+  useEffect(() => {
+    markEssayDetailSeen(essayId);
+  }, [essayId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,6 +210,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
       setShareOpen(true);
     }
     if (choice === "delete") setDeleteOpen(true);
+    if (choice === "deleteVersion" && version) setVersionToDelete(version);
   };
 
   /** 공유할 내용: 보고 있는 버전의 제목 + 빈 줄 + 본문 */
@@ -220,6 +241,37 @@ function EssayDetail({ essayId }: { essayId: string }) {
     close();
   };
 
+  /** L121 이 버전 삭제 */
+  const removeVersion = async (target: Version) => {
+    if (busy.current || !essay) return;
+    busy.current = true;
+    setDeletingVersion(true);
+    const res = await deleteEssayVersion(essay.id, target.id);
+    busy.current = false;
+    setDeletingVersion(false);
+    const name = `${target.label}${objectParticle(target.label)}`;
+    if (res.ok) {
+      setEssay(res.data);
+      // 남은 버전 중 가장 큰 번호
+      const latest = [...res.data.versions].sort((a, b) => b.version_no - a.version_no)[0];
+      setVersionId(latest?.id ?? null);
+      toast(`${name} 지웠어요`);
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    if (res.error.code === "version_not_deletable") {
+      toast("이 버전은 지울 수 없어요");
+      return;
+    }
+    if (res.error.code === "version_not_found") {
+      toast("이미 지운 버전이에요");
+      setVersionId(null); // 다시 불러오면 가장 최근 버전
+      setAttempt((n) => n + 1);
+      return;
+    }
+    toast("지우지 못했어요");
+  };
+
   const removeEssay = async () => {
     if (busy.current || !essay) return;
     busy.current = true;
@@ -236,9 +288,15 @@ function EssayDetail({ essayId }: { essayId: string }) {
     toast("지우지 못했어요");
   };
 
+  /** 편집을 그만두고 내 서재로 (나가기 확인의 기록도 걷어 낸다) */
+  const leaveToLibrary = () => {
+    startExitChain();
+    leave(routes.library);
+  };
+
   const requestExit = () => {
     if (dirty) setLeaveOpen(true);
-    else leave();
+    else leaveToLibrary();
   };
 
   /* ---------- 화면 ---------- */
@@ -246,7 +304,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   if (loadFailed && !essay) {
     return (
       <>
-        <ScreenHeader title="글 상세" back />
+        <ScreenHeader title="글 상세" back onBack={exitToLibrary} />
         <div className="px-5 pt-6">
           <RetryNotice message="연결이 불안정해요" onRetry={() => setAttempt((n) => n + 1)} />
         </div>
@@ -257,7 +315,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
   if (!essay || !version) {
     return (
       <>
-        <ScreenHeader title="글 상세" back />
+        <ScreenHeader title="글 상세" back onBack={exitToLibrary} />
         <Loading fullScreen />
       </>
     );
@@ -282,11 +340,12 @@ function EssayDetail({ essayId }: { essayId: string }) {
         <ScreenHeader
           title="글 상세"
           back
+          onBack={exitToLibrary}
           right={
             <button
               type="button"
               aria-label="더보기"
-              disabled={deleting}
+              disabled={deleting || deletingVersion}
               onClick={() => setMoreOpen(true)}
               className="flex size-10 items-center justify-center rounded-full text-xl text-ink active:bg-subtle"
             >
@@ -395,26 +454,27 @@ function EssayDetail({ essayId }: { essayId: string }) {
         {({ close }) => (
           <div className="flex flex-col gap-2 pb-3">
             <p className="-mt-2 mb-2 text-sm text-ink-soft">덮어쓰면 {version.label}의 이전 내용은 남지 않아요.</p>
+            {/* 되돌릴 수 있는 새 버전이 주 버튼, 이전 내용이 사라지는 덮어쓰기는 보조 (목록 19번) */}
             <Button
               block
               size="lg"
-              onClick={() => {
-                sheetChoice.current = "overwrite";
-                close();
-              }}
-            >
-              저장 후 덮어쓰기
-            </Button>
-            <Button
-              block
-              size="lg"
-              variant="secondary"
               onClick={() => {
                 sheetChoice.current = "new";
                 close();
               }}
             >
               새 버전으로 저장 (v{nextNo})
+            </Button>
+            <Button
+              block
+              size="lg"
+              variant="secondary"
+              onClick={() => {
+                sheetChoice.current = "overwrite";
+                close();
+              }}
+            >
+              덮어써서 저장
             </Button>
             <Button
               block
@@ -431,7 +491,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
       </BottomSheet>
 
       {/* L121 더보기 */}
-      <BottomSheet open={moreOpen} onClose={onMoreClosed}>
+      <BottomSheet open={moreOpen} onClose={onMoreClosed} ariaLabel="글 메뉴">
         {({ close }) => (
           <div className="flex flex-col">
             <button
@@ -444,6 +504,20 @@ function EssayDetail({ essayId }: { essayId: string }) {
             >
               공유하기
             </button>
+            {/* 초안이거나 버전이 1개뿐이면 지울 수 없음 (B version_not_deletable) → 숨김 */}
+            {version.version_no !== 0 && essay.versions.length > 1 && (
+              <button
+                type="button"
+                disabled={deletingVersion}
+                onClick={() => {
+                  moreChoice.current = "deleteVersion";
+                  close();
+                }}
+                className="flex h-13 items-center rounded-xl px-1 text-left text-[15px] text-danger active:bg-subtle disabled:opacity-40"
+              >
+                이 버전 삭제
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -470,7 +544,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
               <button
                 type="button"
                 onClick={() => void share(close)}
-                className="flex flex-col items-start rounded-xl border border-line px-4 py-3 text-left active:bg-subtle"
+                className="flex flex-col items-center rounded-xl border border-line px-4 py-3 text-center active:bg-subtle"
               >
                 <span className="text-[15px] font-semibold">다른 앱으로 공유</span>
                 <span className="text-xs text-ink-mute">카카오톡 · 인스타그램 · 브런치 등</span>
@@ -479,6 +553,25 @@ function EssayDetail({ essayId }: { essayId: string }) {
           </div>
         )}
       </BottomSheet>
+
+      {/* 이 버전 삭제 확인 */}
+      <ConfirmDialog
+        open={versionToDelete !== null}
+        onClose={() => {
+          const target = versionToDelete;
+          setVersionToDelete(null);
+          if (versionDeleteChosen.current && target) {
+            versionDeleteChosen.current = false;
+            void removeVersion(target);
+          }
+        }}
+        title={versionToDelete ? `${versionToDelete.label}${objectParticle(versionToDelete.label)} 지울까요?` : ""}
+        description="이 버전만 지워지고 되돌릴 수 없어요."
+        actions={[
+          { label: "취소", onClick: () => (versionDeleteChosen.current = false) },
+          { label: "삭제", variant: "danger", onClick: () => (versionDeleteChosen.current = true) },
+        ]}
+      />
 
       {/* 글 삭제 확인 */}
       <ConfirmDialog
@@ -494,7 +587,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
         description="모든 버전이 지워지고 되돌릴 수 없어요. 사용한 소재는 소재함에 남아요."
         actions={[
           { label: "취소", onClick: () => (deleteChosen.current = false) },
-          { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
+          { label: "삭제", variant: "danger", onClick: () => (deleteChosen.current = true) },
         ]}
       />
 
@@ -505,7 +598,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
           setLeaveOpen(false);
           if (leaveChosen.current) {
             leaveChosen.current = false;
-            leave();
+            leaveToLibrary();
           }
         }}
         title="고친 내용은 저장되지 않아요"

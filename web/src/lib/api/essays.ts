@@ -57,7 +57,7 @@ export function getEssay(essayId: string) {
 }
 
 /**
- * [에세이 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
+ * [초안 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
  * 201, 같은 save_token이면 200 + 이미 만든 글 (AI를 다시 부르지 않음).
  * 오류: 422 material_not_available, 404 suggestion_not_found, 429 daily_limit, 502 ai_failed
  */
@@ -92,7 +92,7 @@ export function saveRegeneration(essayId: string, requestId: number, input: { sa
   });
 }
 
-/* ---------- 내 서재 (L110) · 글 상세 (L120) · 저장 방식 (L122) · 글 삭제 (L121) — B essays.py ---------- */
+/* ---------- 내 서재 (L110) · 글 상세 (L120) · 저장 방식 (L122) · 이 버전 지우기·글 삭제 (L121) — B essays.py ---------- */
 
 /** L110: 직접 쓰기 임시 저장(1개)은 맨 위, 나머지는 최근에 고친 순서 */
 export function getEssays() {
@@ -126,6 +126,19 @@ export function saveNewVersion(
     path: `/essays/${essayId}/versions`,
     body: input,
     mock: { key: "essays.version.new", params: { essayId } },
+  });
+}
+
+/**
+ * L121 이 버전 지우기 (200 + 남은 글, B delete_version). 저장된 글만.
+ * 번호는 다시 매기지 않고, 글 제목은 남은 최신 버전 제목으로. 이 버전을 바탕으로 한 다른 버전의 based_on_version_id는 비워진다.
+ * 오류: 409 version_not_deletable(초안이거나 마지막 남은 버전), 404 version_not_found·essay_not_found
+ */
+export function deleteEssayVersion(essayId: string, versionId: string) {
+  return request<Essay>({
+    method: "DELETE",
+    path: `/essays/${essayId}/versions/${versionId}`,
+    mock: { key: "essays.version.delete", params: { essayId, versionId } },
   });
 }
 

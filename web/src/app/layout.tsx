@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import AppShell from "@/components/layout/AppShell";
+import NavDirectionListener from "@/components/layout/NavDirectionListener";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ko" className="h-full antialiased">
       <body className="min-h-full">
+        <NavDirectionListener />
         <AppShell>{children}</AppShell>
       </body>
     </html>

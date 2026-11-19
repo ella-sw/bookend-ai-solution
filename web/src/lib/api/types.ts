@@ -439,7 +439,7 @@ export interface SaveEssayInput extends SaveEssayDraftInput {
 
 /* ---------- AI 초안 (W310~W341) — B ai_essays.py ---------- */
 
-/** [에세이 만들기] (B: FirstDraftIn). save_token은 처음 누를 때 하나, [다시 시도]에도 같은 값 */
+/** [초안 만들기] (B: FirstDraftIn). save_token은 처음 누를 때 하나, [다시 시도]에도 같은 값 */
 export interface CreateAiDraftInput {
   /** 고른 소재 (1개 이상), 고른 순서대로 */
   material_ids: Uuid[];

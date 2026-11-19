@@ -83,6 +83,7 @@ export type ApiErrorCode =
   | "essay_not_found"
   | "save_token_used"
   | "version_not_found"
+  | "version_not_deletable"
   | (string & {});
 
 export interface ApiError {

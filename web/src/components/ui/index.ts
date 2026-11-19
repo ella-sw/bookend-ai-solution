@@ -9,3 +9,4 @@ export { RetryNotice } from "./RetryNotice";
 export { ScreenHeader } from "./ScreenHeader";
 export { ToastProvider, useToast } from "./Toast";
 export { useBackToClose } from "./useBackToClose";
+export { useDialogFocus } from "./useDialogFocus";

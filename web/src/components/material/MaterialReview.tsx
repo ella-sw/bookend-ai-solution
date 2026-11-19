@@ -28,8 +28,10 @@ import {
   type Original,
 } from "@/lib/api";
 import { newEssayHref } from "@/lib/newEssayParams";
+import { removeQnaInput } from "@/lib/qnaInputStore";
 import { collectRoutes, routes } from "@/lib/routes";
 import { formOf, MaterialFields, OriginalText, sameForm, validate, type FieldErrors, type Form } from "./MaterialFields";
+import { RecordDeleteDialog, recordDeleteFailMessage, RecordMenuSheet } from "./RecordMenu";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 /** 보관한 소재 (보관 완료 화면에 보여 줄 만큼) */
@@ -44,9 +46,13 @@ const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
  * - done: 후보를 고쳐서 [소재함에 보관] → 보관 완료 ([이 소재로 바로 글쓰기] / [소재함으로])
  *   이미 보관된 소재로 열면 처음부터 보관 완료
  * - 뒤로가기: 고친 내용이 있으면 '고친 내용은 저장되지 않아요' 확인 1번 (보관하지 않은 소재는 확인 대기에 남음)
- * - empty (목록 21번): 안내 + [새로 기록하기]/[새 대화 시작하기](keepOriginal 뒤 새로 시작) + [기록 삭제].
- *   [직접 정리하기]·[다시 분석]·[원본만 보관]은 두지 않음
- * - failed: [다시 분석](can_reanalyze, 하루 한도면 막고 안내) / [직접 정리하기] / [원본만 보관]
+ * - empty (목록 21번): 안내 + [새로 기록하기]/[새 대화 시작하기](keepOriginal 뒤 새로 시작, 이동 뒤 '이전 기록은 원본만 보관했어요')
+ *   + [기록 삭제]. [직접 정리하기]·[다시 분석]·[원본만 보관]은 두지 않음
+ * - failed: [다시 분석](can_reanalyze, 하루 한도면 막고 안내) / [직접 정리하기] / [원본만 보관]('소재 없이 원문만 남겨요',
+ *   성공하면 '원본만 보관했어요 · 소재함 맨 아래에서 볼 수 있어요', 목록 16번)
+ * - done(보관 전)·failed: 헤더 [더보기] → '기록 메뉴' 시트 → [기록 삭제] (목록 1번, M131 더보기와 같은 모양).
+ *   지우기 확인은 세 화면(done·failed·empty)이 같이 쓴다. 성공 → '기록을 지웠어요' + 소재함.
+ *   고친 내용이 있어도 지우기 확인 하나만 (지운 뒤 나가기 확인은 다시 뜨지 않음)
  *
  * 새로 들어올 때마다 처음부터 (key = bfcacheId + recordId)
  */
@@ -80,9 +86,8 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
   const manualOpened = useRef(false);
   /** 다시 분석·원본만 보관·기록 삭제·새로 시작 요청 중 */
   const [acting, setActing] = useState<"reanalyze" | "keep" | "delete" | "restart" | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  /** 삭제 확인에서 [지우기]를 골랐나. 팝업이 다 닫힌 뒤 지운다 */
-  const deleteChosen = useRef(false);
   /** 나가기 확인에서 [나가기]를 골랐나. 팝업이 다 닫힌 뒤(뒤로가기 기록 정리 뒤) 나간다 */
   const leaveChosen = useRef(false);
   const busy = useRef(false);
@@ -180,7 +185,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
     }
     if (handleCommonError(res.error)) return;
     if (res.error.code === "material_deleted") {
-      toast("이미 삭제한 소재예요");
+      toast("이미 지운 소재예요");
       leave(routes.materials);
       return;
     }
@@ -213,18 +218,20 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
     if (res === null) return;
     if (!res.ok && goOnboardingIfNeeded(res.error)) return;
     leave(state?.record_type === "qna" ? collectRoutes.ai() : collectRoutes.free());
+    if (res.ok) toast("이전 기록은 원본만 보관했어요");
   };
 
   const removeRecord = async () => {
     const res = await run("delete", () => deleteRecord(recordId));
     if (res === null) return;
     if (res.ok) {
+      removeQnaInput(recordId); // 보내지 않은 AI 문답 답변도 (목록 9번)
       toast("기록을 지웠어요");
-      leave(routes.home);
+      leave(routes.materials); // 나가기 확인 기록을 걷고 이동 (확인이 다시 뜨지 않음)
       return;
     }
     if (handleCommonError(res.error)) return;
-    toast(res.error.code === "material_confirmed" || res.error.code === "material_deleted" ? "이 기록은 지울 수 없어요" : "지우지 못했어요");
+    toast(recordDeleteFailMessage(res.error));
   };
 
   const keepOnly = async () => {
@@ -232,11 +239,12 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
     if (res === null) return;
     if (res.ok) {
       leave(routes.materials);
+      toast("원본만 보관했어요 · 소재함 맨 아래에서 볼 수 있어요");
       return;
     }
     if (handleCommonError(res.error)) return;
     if (res.error.code === "material_deleted") {
-      toast("이미 삭제한 소재예요");
+      toast("이미 지운 소재예요");
       leave(routes.materials);
       return;
     }
@@ -259,7 +267,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
       return;
     }
     if (res.error.code === "material_deleted") {
-      toast("이미 삭제한 소재예요");
+      toast("이미 지운 소재예요");
       leave(routes.materials);
       return;
     }
@@ -280,7 +288,36 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
 
   /* ---------- 화면 ---------- */
 
-  const header = <ScreenHeader title="소재 확인" back onBack={requestLeave} />;
+  // 기록 메뉴: 보관 전 후보 확인(done)·직접 정리하기·실패 화면에만 (보관 완료·분석 중·소재 없음은 없음)
+  const showMenu = !kept && !!state && (state.analysis_status === "done" || state.analysis_status === "failed");
+  const header = (
+    <ScreenHeader
+      title="소재 확인"
+      back
+      onBack={requestLeave}
+      right={
+        showMenu ? (
+          <button
+            type="button"
+            aria-label="더보기"
+            disabled={saving || acting !== null}
+            onClick={() => setMenuOpen(true)}
+            className="flex size-10 items-center justify-center rounded-full text-xl text-ink active:bg-subtle disabled:opacity-40"
+          >
+            ⋯
+          </button>
+        ) : undefined
+      }
+    />
+  );
+
+  /* 기록 메뉴 · 지우기 확인 (done·failed·empty가 같이 씀) */
+  const recordDialogs = (
+    <>
+      <RecordMenuSheet open={menuOpen} onClose={() => setMenuOpen(false)} onDelete={() => setDeleteOpen(true)} />
+      <RecordDeleteDialog open={deleteOpen} onClose={() => setDeleteOpen(false)} onConfirm={() => void removeRecord()} />
+    </>
+  );
 
   if (loadFailed) {
     return (
@@ -368,6 +405,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
             { label: "나가기", variant: "primary", onClick: () => (leaveChosen.current = true) },
           ]}
         />
+        {recordDialogs}
       </>
     );
   }
@@ -395,23 +433,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
             </Button>
           </div>
         </BottomActionBar>
-
-        <ConfirmDialog
-          open={deleteOpen}
-          onClose={() => {
-            setDeleteOpen(false);
-            if (deleteChosen.current) {
-              deleteChosen.current = false;
-              void removeRecord();
-            }
-          }}
-          title="이 기록을 지울까요?"
-          description="지운 기록은 되돌릴 수 없어요."
-          actions={[
-            { label: "취소", onClick: () => (deleteChosen.current = false) },
-            { label: "지우기", variant: "danger", onClick: () => (deleteChosen.current = true) },
-          ]}
-        />
+        {recordDialogs}
       </>
     );
   }
@@ -426,7 +448,7 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
         <p className="text-[15px] text-ink-soft">원본 기록은 저장돼 있어요.</p>
         {limit && <p className="rounded-xl bg-subtle px-4 py-3 text-sm text-ink-soft">{LIMIT_MESSAGE}</p>}
       </section>
-      <BottomActionBarSpacer height="11rem" />
+      <BottomActionBarSpacer height="12.5rem" />
       <BottomActionBar>
         <div className="flex flex-col gap-2">
           {(state.can_reanalyze || limit) && (
@@ -437,11 +459,17 @@ function MaterialReview({ recordId, openManual }: { recordId: string; openManual
           <Button block variant="secondary" disabled={acting !== null} onClick={startManual}>
             직접 정리하기
           </Button>
-          <Button block variant="ghost" loading={acting === "keep"} disabled={acting !== null} onClick={() => void keepOnly()}>
-            원본만 보관
-          </Button>
+          <div className="flex flex-col items-center">
+            <Button block variant="ghost" loading={acting === "keep"} disabled={acting !== null} onClick={() => void keepOnly()} aria-describedby="keep-only-note">
+              원본만 보관
+            </Button>
+            <p id="keep-only-note" className="text-xs text-ink-mute">
+              소재 없이 원문만 남겨요
+            </p>
+          </div>
         </div>
       </BottomActionBar>
+      {recordDialogs}
     </>
   );
 }

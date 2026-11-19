@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   MATERIAL_RULES,
   TOPICS,
@@ -64,6 +64,8 @@ export function MaterialFields({
   /** false면 제목을 읽기 전용으로 (M131 소재 정보 고치기: 제목은 고칠 수 없음) */
   titleEditable?: boolean;
 }) {
+  // 보이는 글자(label)와 입력칸을 잇는 id
+  const id = useId();
   const [keywordInput, setKeywordInput] = useState("");
   const [keywordError, setKeywordError] = useState<string | null>(null);
 
@@ -105,8 +107,9 @@ export function MaterialFields({
           </p>
         </Field>
       ) : (
-        <Field label="제목 (선택)" error={errors.title}>
+        <Field label="제목 (선택)" error={errors.title} htmlFor={`${id}-title`}>
           <input
+            id={`${id}-title`}
             type="text"
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
@@ -121,8 +124,10 @@ export function MaterialFields({
         label="소재"
         error={errors.summary}
         hint={`${form.summary.trim().length}/${MATERIAL_RULES.summaryMax}`}
+        htmlFor={`${id}-summary`}
       >
         <textarea
+          id={`${id}-summary`}
           value={form.summary}
           onChange={(e) => setForm((f) => ({ ...f, summary: e.target.value }))}
           maxLength={MATERIAL_RULES.summaryMax}
@@ -132,7 +137,7 @@ export function MaterialFields({
         />
       </Field>
 
-      <Field label="키워드" error={keywordError ?? undefined}>
+      <Field label="키워드" error={keywordError ?? undefined} htmlFor={form.keywords.length < MATERIAL_RULES.keywordsMax ? `${id}-keyword` : undefined}>
         <div className="flex flex-wrap gap-2">
           {form.keywords.map((k) => (
             <span
@@ -150,7 +155,7 @@ export function MaterialFields({
                     keywords: f.keywords.filter((x) => x !== k),
                   }))
                 }
-                className="flex size-6 items-center justify-center rounded-full text-ink-mute active:bg-line"
+                className="relative after:absolute after:-inset-2.5 after:content-[''] flex size-6 items-center justify-center rounded-full text-ink-mute active:bg-line"
               >
                 ×
               </button>
@@ -165,6 +170,7 @@ export function MaterialFields({
               }}
             >
               <input
+                id={`${id}-keyword`}
                 value={keywordInput}
                 onChange={(e) => setKeywordInput(e.target.value)}
                 maxLength={MATERIAL_RULES.keywordMax}
@@ -177,7 +183,7 @@ export function MaterialFields({
                 type="submit"
                 aria-label="키워드 추가"
                 disabled={disabled}
-                className="flex size-6 items-center justify-center text-ink-soft"
+                className="relative after:absolute after:-inset-2.5 after:content-[''] flex size-6 items-center justify-center text-ink-soft"
               >
                 +
               </button>
@@ -186,8 +192,8 @@ export function MaterialFields({
         </div>
       </Field>
 
-      <Field label="주제" error={errors.topics}>
-        <div className="flex flex-wrap gap-2">
+      <Field label="주제" error={errors.topics} groupId={`${id}-topics`}>
+        <div role="group" aria-labelledby={`${id}-topics`} className="flex flex-wrap gap-2">
           {TOPICS.map((t) => {
             const selected = form.topics.includes(t.id);
             return (
@@ -213,21 +219,39 @@ export function MaterialFields({
   );
 }
 
+/**
+ * 칸 하나: 보이는 이름 + 입력.
+ * - htmlFor: 입력칸 id → 이름을 <label>로 잇는다 (화면 읽기가 입력칸 이름으로 읽음)
+ * - groupId: 버튼 묶음(주제)의 이름 id (aria-labelledby로 씀)
+ */
 function Field({
   label,
   error,
   hint,
+  htmlFor,
+  groupId,
   children,
 }: {
   label: string;
   error?: string;
   hint?: string;
+  htmlFor?: string;
+  groupId?: string;
   children: React.ReactNode;
 }) {
+  const labelClass = "text-sm font-semibold text-ink-soft";
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-ink-soft">{label}</span>
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className={labelClass}>
+            {label}
+          </label>
+        ) : (
+          <span id={groupId} className={labelClass}>
+            {label}
+          </span>
+        )}
         {hint && <span className="text-xs text-ink-mute">{hint}</span>}
       </div>
       {children}

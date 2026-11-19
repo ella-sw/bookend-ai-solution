@@ -1329,7 +1329,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   // 글 상세 (B essays.py get_essay). 임시 저장은 404
   "essays.get": ({ params }): Essay => essayOf(savedEssay(params.essayId)),
 
-  // [에세이 만들기] (B first_draft): 초안(version 0) 자동 보관. 같은 save_token이면 그 글 (AI 다시 안 부름)
+  // [초안 만들기] (B first_draft): 초안(version 0) 자동 보관. 같은 save_token이면 그 글 (AI 다시 안 부름)
   "essays.ai.create": ({ body, scenario }): Essay => {
     const db = getDb();
     const input = (body ?? {}) as Partial<CreateAiDraftInput>;
@@ -1396,6 +1396,8 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     } else {
       const prev = db.regens[String(input.based_on_request_id)];
       if (!prev || prev.essay_id !== essay.id || prev.saved) fail("conflict", "no_result");
+      // L121: 바탕 버전이 그사이 지워졌으면 404 (B 15ea27d _require_version)
+      if (!essay.versions.some((v) => v.id === prev!.based_on_version_id)) fail("not_found", "version_not_found");
       baseBody = prev!.body;
       baseTitle = prev!.title;
       versionId = prev!.based_on_version_id;
@@ -1431,6 +1433,8 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     if (done) return essayOf(done);
     const r = db.regens[params.requestId];
     if (!r || r.essay_id !== essay.id || r.saved) fail("conflict", "no_result");
+    // L121: 바탕 버전이 그사이 지워졌으면 404 (B 15ea27d _require_version)
+    if (!essay.versions.some((v) => v.id === r!.based_on_version_id)) fail("not_found", "version_not_found");
     const t = now();
     const next = Math.max(0, ...essay.versions.map((v) => v.version_no)) + 1;
     essay.versions.push({
@@ -1509,6 +1513,20 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       updated_at: t,
     });
     afterEssaySave(essay, t);
+    return essayOf(essay);
+  },
+
+  // L121 이 버전 지우기 (B delete_version): 초안(0)·마지막 남은 버전은 409, 번호는 다시 매기지 않음
+  "essays.version.delete": ({ params }): Essay => {
+    const essay = savedEssay(params.essayId);
+    const v = essay.versions.find((x) => x.id === params.versionId) ?? fail("not_found", "version_not_found");
+    if (v.version_no === 0 || essay.versions.length <= 1) fail("conflict", "version_not_deletable");
+    essay.versions = essay.versions.filter((x) => x.id !== v.id);
+    // on delete set null: 이 버전을 바탕으로 한 다른 버전
+    for (const x of essay.versions) if (x.based_on_version_id === v.id) x.based_on_version_id = null;
+    // 글 제목 = 남은 최신 버전 제목 (B는 title만 맞추고 고친 시각은 그대로)
+    const latest = [...essay.versions].sort((a, b) => b.version_no - a.version_no)[0];
+    essay.title = latest?.title ?? null;
     return essayOf(essay);
   },
 

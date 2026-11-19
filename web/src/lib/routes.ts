@@ -38,6 +38,12 @@ export const collectRoutes = {
   ai: (resume?: ResumeMode) => (resume ? `${routes.collectAi}?resume=${resume}` : routes.collectAi),
 };
 
+/**
+ * 홈에서 소재 모으기 방식 고르기(H120)를 바로 연다 (목록 14번). 빈 상태의 [소재 모으기]가 쓴다.
+ * 홈은 시트를 연 뒤 주소에서 collect를 지운다 (replace)
+ */
+export const collectHomeHref = `${routes.home}?collect=1`;
+
 /** 하단 탭 4개 (홈 · 소재함 · 내 서재 · 설정) */
 export const tabs = [
   { key: "home", label: "홈", href: routes.home },
@@ -90,7 +96,7 @@ export const screens = [
   { id: "M130", name: "소재 상세", href: routes.material("sample") },
   { id: "M130", name: "보관한 원본", href: routes.keptRecord("sample") },
   { id: "N110", name: "소재 고르기", href: routes.newSelect },
-  { id: "N120", name: "글의 방향 확인", href: routes.newDirection },
+  { id: "N120", name: "고른 소재", href: routes.newDirection },
   { id: "N130", name: "글쓰기 제안 상세", href: routes.suggestion("sample") },
   { id: "N140", name: "직접 쓰기", href: routes.newDirect },
   { id: "W310", name: "AI 초안 · 문체·길이 선택", href: routes.newAiStyle },

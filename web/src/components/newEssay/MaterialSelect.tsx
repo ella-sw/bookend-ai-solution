@@ -6,6 +6,7 @@ import {
   BottomActionBar,
   BottomActionBarSpacer,
   Button,
+  ButtonLink,
   Chip,
   ChipRow,
   Loading,
@@ -15,8 +16,9 @@ import {
 } from "@/components/ui";
 import { getMaterialBox, getRelatedMaterials, TOPICS, type MaterialCard as MaterialCardData, type RelatedMaterial } from "@/lib/api";
 import { formatMonthDay } from "@/lib/format";
-import { newEssayHref, readNewEssayParams, type NewEssayParams } from "@/lib/newEssayParams";
-import { routes } from "@/lib/routes";
+import { isNewEssayDone, useEnsureFlowId, useLeaveFinishedFlow } from "@/lib/finishedFlow";
+import { newEssayHref, readNewEssayParams, searchKeyWithoutFlow, type NewEssayParams } from "@/lib/newEssayParams";
+import { collectHomeHref, routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useDirectStart } from "./useDirectStart";
 
@@ -28,17 +30,21 @@ const RELATED_DELAY_MS = 300;
  * - 보관 확정 소재만. 주제 칩으로 거르고 체크 상자로 고르기/해제. 고른 소재는 위에 따로
  * - 함께 쓰면 좋은 소재: 1개 이상 고르면 (0.3초 묶어서) 참고로 보여 준다. 고르지 않아도 됨
  * - 들어올 때 m이 있으면 그 소재가 선택된 상태 (N120 [+ 소재 추가], N130 [소재 바꾸기], M120·M130)
- * - [다음 (N개)] → N120 (m 고른 순서, s·from 그대로) / [소재 없이 직접 쓰기] → N140 (from = no_material)
+ * - [다음 (N개)] → N120 (m 고른 순서, s·from·f 그대로) / [소재 없이 직접 쓰기] → N140 (from = no_material, f 그대로)
+ * - 보관한 소재가 없으면: 주 버튼 [소재 모으기](홈에서 H120 바로 열기) / 보조 [소재 없이 직접 쓰기] (목록 14번)
+ * - 흐름 id(f)가 없으면 만들어 주소에 붙인다. 이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
  *
- * 새로 들어올 때마다 주소의 값으로 처음부터 (key = bfcacheId + 주소 검색값)
+ * 새로 들어올 때마다 주소의 값으로 처음부터 (key = bfcacheId + 주소 검색값, f는 빼고)
  */
 export default function MaterialSelectScreen() {
   const { bfcacheId } = useRouter();
   const search = useSearchParams();
-  return <MaterialSelect key={`${bfcacheId}:${search.toString()}`} initial={readNewEssayParams(search)} />;
+  return <MaterialSelect key={`${bfcacheId}:${searchKeyWithoutFlow(search.toString())}`} initial={readNewEssayParams(search)} query={search.toString()} />;
 }
 
-function MaterialSelect({ initial }: { initial: NewEssayParams }) {
+function MaterialSelect({ initial, query }: { initial: NewEssayParams; query: string }) {
+  useLeaveFinishedFlow(() => isNewEssayDone(initial.f));
+  useEnsureFlowId(routes.newSelect, query);
   const router = useRouter();
   const goOnboardingIfNeeded = useOnboardingRedirect();
 
@@ -95,11 +101,11 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
 
   const goNext = () => {
     if (usable.length === 0) return;
-    router.push(newEssayHref(routes.newDirection, { m: usable, s: initial.s, from: initial.from }));
+    router.push(newEssayHref(routes.newDirection, { m: usable, s: initial.s, from: initial.from, f: initial.f }));
   };
 
   /** 소재 없이 직접 쓰기 (임시 저장이 있으면 H121 이어 쓰기 확인) */
-  const writeWithout = () => void direct.start({ m: [], s: null, from: "no_material" });
+  const writeWithout = () => void direct.start({ m: [], s: null, from: "no_material", f: initial.f });
 
   const header = <ScreenHeader title="소재 고르기" back />;
 
@@ -129,9 +135,14 @@ function MaterialSelect({ initial }: { initial: NewEssayParams }) {
         {header}
         <section className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
           <p className="text-[15px] font-semibold">아직 보관한 소재가 없어요</p>
-          <Button variant="secondary" loading={direct.checking} onClick={writeWithout}>
-            소재 없이 직접 쓰기
-          </Button>
+          <div className="flex w-full max-w-xs flex-col gap-2">
+            <ButtonLink href={collectHomeHref} block>
+              소재 모으기
+            </ButtonLink>
+            <Button variant="ghost" block loading={direct.checking} onClick={writeWithout}>
+              소재 없이 직접 쓰기
+            </Button>
+          </div>
         </section>
         {direct.dialog}
       </>

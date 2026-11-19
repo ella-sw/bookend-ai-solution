@@ -39,9 +39,9 @@ const EMPTY: Snapshot = { title: "", body: "" };
 const titleOrNull = (title: string) => (title.trim() ? title : null);
 
 /**
- * W110 자유롭게 기록하기 + W111 임시 저장됨 + W113 나가기 확인 (UI 설계서 v7 7쪽)
+ * W110 자유롭게 기록하기 + W111 임시 저장됨(토스트 '임시 저장했어요', 목록 18번) + W113 나가기 확인 (UI 설계서 v7 7쪽)
  * - ?resume=draft: getFreeDraft()로 채우고 그 record_id를 기억 (없으면 빈 화면 + '이어 쓸 기록이 없어요')
- * - [임시 저장]: 성공하면 받은 id를 기억하고 W111. 404 draft_not_found면 record_id 없이 한 번 더
+ * - [임시 저장]: 성공하면 받은 id를 기억하고 '임시 저장했어요' 토스트. 404 draft_not_found면 record_id 없이 한 번 더
  * - [소재로 저장]: 열 때 만든 save_token으로 저장 → M120. 실패하면 입력 유지 + [다시 시도](같은 save_token, 목록 17번 ⑨)
  * - 뒤로가기(헤더·브라우저·휴대폰): 마지막 임시 저장 뒤 바뀐 게 있으면 W113, 없으면 바로 나감
  * - 기록 시작 이벤트: 화면에 들어올 때마다 1번 (목록 23·24번)
@@ -68,7 +68,6 @@ function FreeWriter({ resume }: { resume: boolean }) {
   const [savingDraft, setSavingDraft] = useState(false);
   const [savingRecord, setSavingRecord] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
-  const [draftSavedOpen, setDraftSavedOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
 
   /** 이어 쓰는 임시 저장 id (임시 저장 성공 때마다 갱신) */
@@ -155,7 +154,7 @@ function FreeWriter({ resume }: { resume: boolean }) {
   };
 
   const onSaveDraftClick = async () => {
-    if (await saveDraft()) setDraftSavedOpen(true);
+    if (await saveDraft()) toast("임시 저장했어요");
   };
 
   /* ---------- 소재로 저장 ---------- */
@@ -277,14 +276,6 @@ function FreeWriter({ resume }: { resume: boolean }) {
           소재로 저장
         </Button>
       </BottomActionBar>
-
-      {/* W111 임시 저장됨 */}
-      <ConfirmDialog
-        open={draftSavedOpen}
-        onClose={() => setDraftSavedOpen(false)}
-        title="임시 저장됐습니다."
-        actions={[{ label: "확인", variant: "primary", onClick: () => {} }]}
-      />
 
       {/* W113 나가기 확인. 고른 동작은 팝업이 닫힌 뒤 onExitDialogClosed에서 실행 */}
       <ConfirmDialog

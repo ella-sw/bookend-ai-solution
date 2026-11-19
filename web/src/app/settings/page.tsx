@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog, RetryNotice, ScreenHeader, Spinner, useToast } from "@/components/ui";
 import { clearAllData } from "@/lib/api";
+import { clearFinishedFlowMarks } from "@/lib/finishedFlow";
+import { clearAllQnaInputs } from "@/lib/qnaInputStore";
 import { clearAllRegenResults } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
@@ -11,7 +13,8 @@ import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 /**
  * S110 설정 + S120 모든 기록 지우기 (UI 설계서 v7 27쪽, B DELETE /me/data)
  * - 기록 보관 안내, 이용약관·개인정보 처리방침 ('준비 중이에요', O110 [자세히 보기]와 같음)
- * - [모든 기록 지우기] → 확인 → clearAllData → 이 탭의 다시 만들기 결과도 비움 → '모든 기록을 지웠어요' + 홈
+ * - [모든 기록 지우기] → 확인 → clearAllData → 이 탭의 다시 만들기 결과·끝난 흐름 표시(목록 7번)·
+ *   보내지 않은 AI 문답 답변(목록 9번)도 비움 → '모든 기록을 지웠어요' + 홈
  *   실패 → '지우지 못했어요' + [다시 시도]. 요청 중 막음. 익명 사용자(세션)·동의는 그대로
  */
 export default function SettingsPage() {
@@ -34,6 +37,8 @@ export default function SettingsPage() {
     setClearing(false);
     if (res.ok) {
       clearAllRegenResults();
+      clearFinishedFlowMarks();
+      clearAllQnaInputs();
       toast("모든 기록을 지웠어요");
       router.replace(routes.home);
       return;
@@ -56,7 +61,7 @@ export default function SettingsPage() {
       <ul className="mt-4 divide-y divide-line border-y border-line">
         <SettingsRow label="이용약관" onClick={() => toast("준비 중이에요")} />
         <SettingsRow label="개인정보 처리방침" onClick={() => toast("준비 중이에요")} />
-        <SettingsRow label="모든 기록 지우기" danger busy={clearing} onClick={() => setConfirmOpen(true)} />
+        <SettingsRow label="모든 기록 삭제" danger busy={clearing} onClick={() => setConfirmOpen(true)} />
       </ul>
 
       {failed && !clearing && (
@@ -79,7 +84,7 @@ export default function SettingsPage() {
         description="소재·글·대화·임시 저장이 모두 지워지고 되돌릴 수 없어요."
         actions={[
           { label: "취소", onClick: () => (clearChosen.current = false) },
-          { label: "지우기", variant: "danger", onClick: () => (clearChosen.current = true) },
+          { label: "삭제", variant: "danger", onClick: () => (clearChosen.current = true) },
         ]}
       />
     </>

@@ -37,6 +37,7 @@ import { newEssayHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { formOf, MaterialFields, OriginalText, sameForm, validate, type FieldErrors, type Form } from "./MaterialFields";
+import { SheetItem } from "./RecordMenu";
 
 const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
 
@@ -102,7 +103,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
     (error: ApiError) => {
       if (goOnboardingIfNeeded(error)) return true;
       if (error.code === "material_not_found") {
-        toast("이미 삭제한 소재예요");
+        toast("이미 지운 소재예요");
         router.replace(routes.materials);
         return true;
       }
@@ -223,12 +224,12 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
     const res = await run("delete", () => deleteMaterial(materialId));
     if (!res) return;
     if (res.ok) {
-      toast("소재를 삭제했어요");
+      toast("소재를 지웠어요");
       router.replace(routes.materials);
       return;
     }
     if (handleCommonError(res.error)) return;
-    toast("삭제하지 못했어요");
+    toast("지우지 못했어요");
   };
 
   /** M131 시트가 다 닫힌 뒤 고른 것을 한다 (팝업·화면 전환이 뒤로가기 기록과 엉키지 않게) */
@@ -355,7 +356,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
       )}
 
       {/* M131 더보기 */}
-      <BottomSheet open={sheetOpen} onClose={onSheetClosed}>
+      <BottomSheet open={sheetOpen} onClose={onSheetClosed} ariaLabel="소재 메뉴">
         {({ close }) => (
           <div className="flex flex-col">
             <SheetItem
@@ -396,8 +397,8 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
             void removeMaterial();
           }
         }}
-        title="소재를 삭제할까요?"
-        description="소재만 지워지고 원본 기록은 남아요. 원본까지 지우려면 설정 > 모든 기록 지우기를 이용해 주세요."
+        title="소재를 지울까요?"
+        description="소재만 지워지고 원본 기록은 남아요. 원본까지 지우려면 설정 > 모든 기록 삭제를 이용해 주세요."
         actions={[
           { label: "취소", onClick: () => (deleteChosen.current = false) },
           { label: "삭제", variant: "danger", onClick: () => (deleteChosen.current = true) },
@@ -518,18 +519,5 @@ function CompareColumn({
       <TopicsAndKeywords topics={t} keywords={k} />
       {result?.evidence && <p className="text-xs leading-relaxed text-ink-soft">“{result.evidence}”</p>}
     </div>
-  );
-}
-
-function SheetItem({ label, onClick, danger, disabled }: { label: string; onClick: () => void; danger?: boolean; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex h-13 items-center rounded-xl px-1 text-left text-[15px] active:bg-subtle disabled:opacity-40 ${danger ? "text-danger" : "text-ink"}`}
-    >
-      {label}
-    </button>
   );
 }
