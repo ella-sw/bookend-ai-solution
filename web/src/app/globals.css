@@ -1,24 +1,32 @@
 @import "tailwindcss";
 
-/* 색·크기 기준값. 디자인이 정해지면 여기만 바꾼다. */
+/* 색·크기 기준값. 디자인이 정해지면 여기만 바꾼다.
+   Figma 초기 시안(여운) 테마: 따뜻한 미색 바탕 + 올리브 그린 */
 @theme {
-  --color-canvas: #f2f2f2; /* PC에서 화면 양옆 */
-  --color-surface: #ffffff;
-  --color-subtle: #f7f7f7;
-  --color-line: #e5e5e5;
-  --color-ink: #222222;
-  --color-ink-soft: #595959;
-  --color-ink-mute: #8c8c8c;
-  --color-primary: #2f4858;
-  --color-primary-soft: #dde6ee;
-  --color-accent-soft: #fff8e5;
-  --color-danger: #c00000;
+  --color-canvas: #ebeae3; /* PC에서 화면 양옆 */
+  --color-page: #f7f6f1; /* 화면 바탕 (미색) */
+  --color-surface: #fffffb; /* 카드·입력창·창 */
+  --color-subtle: #eff1e9; /* 안내 상자·눌림 (연한 세이지) */
+  --color-line: #e6e5df;
+  --color-ink: #2a2925;
+  --color-ink-soft: #5d5c57;
+  --color-ink-mute: #8e8d88;
+  --color-primary: #68745e; /* 올리브 그린 */
+  --color-primary-soft: #e4e9dc;
+  --color-accent-soft: #f6eedd;
+  --color-accent-ink: #7a4a12; /* accent-soft 위 글자 */
+  --color-danger: #b42318;
 
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
     "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
 
   --spacing-tabbar: 3.5rem;
+}
+
+/* 제목용 명조 (layout.tsx의 next/font가 --font-noto-serif-kr을 넣는다) */
+@theme inline {
+  --font-serif: var(--font-noto-serif-kr), "Nanum Myeongjo", "AppleMyungjo", serif;
 }
 
 :root {

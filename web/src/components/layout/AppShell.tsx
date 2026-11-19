@@ -13,7 +13,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <ToastProvider>
       <KeyboardInset />
-      <div className="relative mx-auto flex min-h-dvh w-full max-w-(--app-max-width) flex-col bg-surface shadow-[0_0_0_1px_var(--color-line)]">
+      <div className="relative mx-auto flex min-h-dvh w-full max-w-(--app-max-width) flex-col bg-page shadow-[0_0_0_1px_var(--color-line)]">
         <main className="flex flex-1 flex-col">{children}</main>
         <Suspense fallback={null}>
           <TabBarSlot />

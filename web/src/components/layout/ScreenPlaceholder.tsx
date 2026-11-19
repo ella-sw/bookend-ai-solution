@@ -25,7 +25,7 @@ export default function ScreenPlaceholder({
       <ScreenHeader title={title} back={back} />
       <section className="flex flex-1 flex-col gap-5 px-5 py-6">
         <div>
-          <span className="inline-flex rounded-md bg-accent-soft px-2 py-1 font-mono text-xs font-semibold text-[#843c0c]">
+          <span className="inline-flex rounded-md bg-accent-soft px-2 py-1 font-mono text-xs font-semibold text-accent-ink">
             {id} · 준비 중
           </span>
           {param && (

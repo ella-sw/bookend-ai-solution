@@ -404,7 +404,7 @@ function QnaChat({ resume }: { resume: ResumeMode | null }) {
       />
 
       {/* 진행도: 대화가 길어져도 보이게 헤더 바로 아래에 고정 (헤더 높이 h-14) */}
-      <div className="sticky top-14 z-10 border-b border-line/60 bg-surface px-5 pt-3 pb-3" aria-label="진행도">
+      <div className="sticky top-14 z-10 border-b border-line/60 bg-page px-5 pt-3 pb-3" aria-label="진행도">
         <div className="flex items-center justify-between text-sm">
           <span className="font-semibold">
             {answerCount} / {QNA_RULES.maxAnswers}
