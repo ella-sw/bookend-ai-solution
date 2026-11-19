@@ -21,3 +21,12 @@ export function titleOrPreview(title: string | null, preview?: string, length = 
   if (p) return p.length > length ? `${p.slice(0, length)}…` : p;
   return "(제목 없음)";
 }
+
+/** 목적격 조사: '초안을', 'v1을', 'v2를', 'v3을' (숫자는 읽는 소리로) */
+export function objectParticle(word: string): "을" | "를" {
+  const last = word.trim().slice(-1);
+  if (/[0-9]/.test(last)) return "013678".includes(last) ? "을" : "를";
+  const code = last.charCodeAt(0);
+  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 === 0 ? "를" : "을";
+  return "를";
+}

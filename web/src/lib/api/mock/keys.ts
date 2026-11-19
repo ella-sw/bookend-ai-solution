@@ -47,6 +47,7 @@ export const MOCK_KEYS = {
   "essays.list": "내 서재 (L110)",
   "essays.version.overwrite": "저장 후 덮어쓰기 (L122)",
   "essays.version.new": "새 버전으로 저장 (L122)",
+  "essays.version.delete": "이 버전 지우기 (L121)",
   "essays.delete": "글 삭제 (L121)",
   "settings.clear": "모든 기록 지우기 (S120)",
   "events.log": "이벤트 기록",

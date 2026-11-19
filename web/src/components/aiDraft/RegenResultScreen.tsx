@@ -7,6 +7,7 @@ import { BottomActionBar, BottomActionBarSpacer, Button, ConfirmDialog, Loading,
 import { Overlay } from "@/components/ui/Overlay";
 import { getEssay, newSaveToken, saveRegeneration, type Essay, type RegenResult } from "@/lib/api";
 import { isEssayDetailSeen, useLeaveFinishedFlow } from "@/lib/finishedFlow";
+import { objectParticle } from "@/lib/format";
 import { regenStyleHref } from "@/lib/newEssayParams";
 import { getRegenResult, removeRegenResult } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
@@ -39,15 +40,6 @@ export default function RegenResultScreen() {
 }
 
 type ExitChoice = "save" | "leave" | null;
-
-/** 목적격 조사: '초안을', 'v1을', 'v2를' (숫자는 읽는 소리로) */
-function objectParticle(word: string): "을" | "를" {
-  const last = word.trim().slice(-1);
-  if (/[0-9]/.test(last)) return "013678".includes(last) ? "을" : "를";
-  const code = last.charCodeAt(0);
-  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 === 0 ? "를" : "을";
-  return "를";
-}
 
 /** 정보 줄 앞부분: 'v2를 바탕으로 다시 만든 글 · 3번째 결과' */
 function regenLead(baseLabel: string | null, regenCount: number) {
@@ -207,6 +199,7 @@ function RegenResultView({ essayId, requestId }: { essayId: string; requestId: n
  * - 다음 버전 번호는 화면이 이미 불러온 글에서(nextNo). 아직 없으면 창을 열 때 불러온다
  * - 성공 → 결과 지우고 L120 (이 창이 닫힌 뒤 onSaved가 W340 자리를 L120으로 바꾼다, 나가기 확인 없음)
  * - 실패 → 창에 '저장하지 못했어요' + [다시 시도], 결과 유지. 409 no_result → 토스트 + 글 보기
+ *   404 version_not_found (바탕 버전이 L121에서 지워짐, B 15ea27d) → '이전 결과가 사라졌어요' + 글 상세 (W310과 같음)
  * - 포커스 (useDialogFocus): 열면 첫 버튼([취소]), Tab은 창 안에서만, Esc는 [취소]와 같음(저장 중에는 무시), 닫으면 열기 전 포커스로
  */
 function SaveVersionDialog({
@@ -273,6 +266,13 @@ function SaveVersionDialog({
     if (res.error.code === "no_result") {
       removeRegenResult(result.essay_id, result.request_id);
       toast("이미 저장했거나 결과가 사라졌어요");
+      goAfterClose.current = routes.essay(result.essay_id);
+      close();
+      return;
+    }
+    if (res.error.code === "version_not_found") {
+      removeRegenResult(result.essay_id, result.request_id);
+      toast("이전 결과가 사라졌어요");
       goAfterClose.current = routes.essay(result.essay_id);
       close();
       return;

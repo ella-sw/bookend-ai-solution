@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import {
   deleteEssay,
+  deleteEssayVersion,
   ESSAY_RULES,
   getEssay,
   logEvent,
@@ -29,6 +30,7 @@ import {
   type Version,
 } from "@/lib/api";
 import { markEssayDetailSeen, useExitToLibrary } from "@/lib/finishedFlow";
+import { objectParticle } from "@/lib/format";
 import { startExitChain } from "@/lib/navDirection";
 import { regenStyleHref } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
@@ -47,7 +49,11 @@ const titleOrNull = (title: string) => (title.trim() ? title.trim() : null);
  *   save_token은 편집 시작 때 하나. 실패하면 고친 내용 유지 + '저장하지 못했어요' [다시 시도]
  *   편집 중 뒤로가기: 바뀐 게 있으면 '고친 내용은 저장되지 않아요'
  * - [다시 만들기] → W310 다시 만들기 모드 (보고 있는 버전 바탕)
- * - ⋯ → L121: [공유하기] → L123 / [글 삭제] (확인 뒤 → L110, 사용한 소재는 소재함에 남음)
+ * - ⋯ → L121: [공유하기] → L123 / [이 버전 삭제] / [글 삭제] (확인 뒤 → L110, 사용한 소재는 소재함에 남음)
+ *   [이 버전 삭제] (B delete_version): 보고 있는 버전이 초안이거나 버전이 1개뿐이면 숨김.
+ *   확인 '{label}을 지울까요?' → 성공하면 받은 글로 다시 그리고 남은 버전 중 가장 큰 번호를 고름 + '{label}을 지웠어요'.
+ *   실패: version_not_deletable '이 버전은 지울 수 없어요' / version_not_found 다시 불러오기 + '이미 지운 버전이에요' /
+ *   essay_not_found 등 공통 오류는 handleCommonError / 그 밖 '지우지 못했어요' 
  * - L123 (목록 2·13·15번): 보고 있는 버전의 제목 + 빈 줄 + 본문.
  *   [복사] 성공 → '복사했어요' + body_shared(copy). [다른 앱으로 공유]는 navigator.share가 있을 때만,
  *   오류 없이 끝나면 body_shared(share_sheet). 취소(AbortError)·실패는 기록하지 않음
@@ -89,7 +95,11 @@ function EssayDetail({ essayId }: { essayId: string }) {
 
   // L121 더보기 · L123 공유 · 글 삭제
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreChoice = useRef<"share" | "delete" | null>(null);
+  const moreChoice = useRef<"share" | "deleteVersion" | "delete" | null>(null);
+  /** 지우기 확인 중인 버전 (메뉴를 연 때 보고 있던 것) */
+  const [versionToDelete, setVersionToDelete] = useState<Version | null>(null);
+  const versionDeleteChosen = useRef(false);
+  const [deletingVersion, setDeletingVersion] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [canShare, setCanShare] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -200,6 +210,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
       setShareOpen(true);
     }
     if (choice === "delete") setDeleteOpen(true);
+    if (choice === "deleteVersion" && version) setVersionToDelete(version);
   };
 
   /** 공유할 내용: 보고 있는 버전의 제목 + 빈 줄 + 본문 */
@@ -228,6 +239,37 @@ function EssayDetail({ essayId }: { essayId: string }) {
       if (!(e instanceof DOMException && e.name === "AbortError")) toast("공유하지 못했어요");
     }
     close();
+  };
+
+  /** L121 이 버전 삭제 */
+  const removeVersion = async (target: Version) => {
+    if (busy.current || !essay) return;
+    busy.current = true;
+    setDeletingVersion(true);
+    const res = await deleteEssayVersion(essay.id, target.id);
+    busy.current = false;
+    setDeletingVersion(false);
+    const name = `${target.label}${objectParticle(target.label)}`;
+    if (res.ok) {
+      setEssay(res.data);
+      // 남은 버전 중 가장 큰 번호
+      const latest = [...res.data.versions].sort((a, b) => b.version_no - a.version_no)[0];
+      setVersionId(latest?.id ?? null);
+      toast(`${name} 지웠어요`);
+      return;
+    }
+    if (handleCommonError(res.error)) return;
+    if (res.error.code === "version_not_deletable") {
+      toast("이 버전은 지울 수 없어요");
+      return;
+    }
+    if (res.error.code === "version_not_found") {
+      toast("이미 지운 버전이에요");
+      setVersionId(null); // 다시 불러오면 가장 최근 버전
+      setAttempt((n) => n + 1);
+      return;
+    }
+    toast("지우지 못했어요");
   };
 
   const removeEssay = async () => {
@@ -303,7 +345,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
             <button
               type="button"
               aria-label="더보기"
-              disabled={deleting}
+              disabled={deleting || deletingVersion}
               onClick={() => setMoreOpen(true)}
               className="flex size-10 items-center justify-center rounded-full text-xl text-ink active:bg-subtle"
             >
@@ -462,6 +504,20 @@ function EssayDetail({ essayId }: { essayId: string }) {
             >
               공유하기
             </button>
+            {/* 초안이거나 버전이 1개뿐이면 지울 수 없음 (B version_not_deletable) → 숨김 */}
+            {version.version_no !== 0 && essay.versions.length > 1 && (
+              <button
+                type="button"
+                disabled={deletingVersion}
+                onClick={() => {
+                  moreChoice.current = "deleteVersion";
+                  close();
+                }}
+                className="flex h-13 items-center rounded-xl px-1 text-left text-[15px] text-danger active:bg-subtle disabled:opacity-40"
+              >
+                이 버전 삭제
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -497,6 +553,25 @@ function EssayDetail({ essayId }: { essayId: string }) {
           </div>
         )}
       </BottomSheet>
+
+      {/* 이 버전 삭제 확인 */}
+      <ConfirmDialog
+        open={versionToDelete !== null}
+        onClose={() => {
+          const target = versionToDelete;
+          setVersionToDelete(null);
+          if (versionDeleteChosen.current && target) {
+            versionDeleteChosen.current = false;
+            void removeVersion(target);
+          }
+        }}
+        title={versionToDelete ? `${versionToDelete.label}${objectParticle(versionToDelete.label)} 지울까요?` : ""}
+        description="이 버전만 지워지고 되돌릴 수 없어요."
+        actions={[
+          { label: "취소", onClick: () => (versionDeleteChosen.current = false) },
+          { label: "삭제", variant: "danger", onClick: () => (versionDeleteChosen.current = true) },
+        ]}
+      />
 
       {/* 글 삭제 확인 */}
       <ConfirmDialog
