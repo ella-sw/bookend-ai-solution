@@ -244,6 +244,7 @@ function KeptRecord({ recordId }: { recordId: string }) {
       {/* 더보기: [기록 삭제]만. 시트가 닫힌 뒤 확인 창을 연다 */}
       <BottomSheet
         open={sheetOpen}
+        ariaLabel="기록 메뉴"
         onClose={() => {
           setSheetOpen(false);
           if (deleteFromSheet.current) {

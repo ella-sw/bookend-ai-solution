@@ -449,7 +449,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
       </BottomSheet>
 
       {/* L121 더보기 */}
-      <BottomSheet open={moreOpen} onClose={onMoreClosed}>
+      <BottomSheet open={moreOpen} onClose={onMoreClosed} ariaLabel="글 메뉴">
         {({ close }) => (
           <div className="flex flex-col">
             <button

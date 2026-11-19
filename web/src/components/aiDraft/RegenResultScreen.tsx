@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLeaveGuard } from "@/components/collect/useLeaveGuard";
-import { BottomActionBar, BottomActionBarSpacer, Button, ConfirmDialog, Loading, ScreenHeader, useBackToClose, useToast } from "@/components/ui";
+import { BottomActionBar, BottomActionBarSpacer, Button, ConfirmDialog, Loading, ScreenHeader, useBackToClose, useDialogFocus, useToast } from "@/components/ui";
 import { Overlay } from "@/components/ui/Overlay";
 import { getEssay, newSaveToken, saveRegeneration, type Essay, type RegenResult } from "@/lib/api";
 import { isEssayDetailSeen, useLeaveFinishedFlow } from "@/lib/finishedFlow";
@@ -182,7 +182,8 @@ function RegenResultView({ essayId, requestId }: { essayId: string; requestId: n
         </div>
       </BottomActionBar>
 
-      {saveOpen && <SaveVersionDialog result={result} nextNo={nextNo} onClose={() => setSaveOpen(false)} onSaved={onSaved} />}
+      {/* 늘 그려 두고 open으로 여닫는다 (열린 채로 처음 그리면 개발 모드에서 뒤로가기 기록이 두 번 쌓임) */}
+      <SaveVersionDialog open={saveOpen} result={result} nextNo={nextNo} onClose={() => setSaveOpen(false)} onSaved={onSaved} />
 
       {/* 저장하지 않고 나가기 확인 (W211과 같은 모양). 고른 동작은 팝업이 닫힌 뒤 onExitDialogClosed에서 실행 */}
       <ConfirmDialog
@@ -202,17 +203,20 @@ function RegenResultView({ essayId, requestId }: { essayId: string; requestId: n
 
 /**
  * W341 저장 창: 'v{N}로 저장할까요?' (N = 지금 버전 중 가장 큰 번호 + 1, 초안만 있으면 v1)
- * - save_token은 창을 열 때 하나, [다시 시도]에도 같은 값 (두 번 눌러도 버전은 하나)
+ * - save_token은 이 결과 화면에서 하나: 창을 다시 열어도, [다시 시도]에도 같은 값 (두 번 눌러도 버전은 하나)
  * - 다음 버전 번호는 화면이 이미 불러온 글에서(nextNo). 아직 없으면 창을 열 때 불러온다
  * - 성공 → 결과 지우고 L120 (이 창이 닫힌 뒤 onSaved가 W340 자리를 L120으로 바꾼다, 나가기 확인 없음)
  * - 실패 → 창에 '저장하지 못했어요' + [다시 시도], 결과 유지. 409 no_result → 토스트 + 글 보기
+ * - 포커스 (useDialogFocus): 열면 첫 버튼([취소]), Tab은 창 안에서만, Esc는 [취소]와 같음(저장 중에는 무시), 닫으면 열기 전 포커스로
  */
 function SaveVersionDialog({
+  open,
   result,
   nextNo: knownNextNo,
   onClose,
   onSaved,
 }: {
+  open: boolean;
   result: RegenResult;
   nextNo: number | null;
   onClose: () => void;
@@ -230,14 +234,18 @@ function SaveVersionDialog({
   /** 창이 닫힌 뒤 갈 곳 */
   const goAfterClose = useRef<string | null>(null);
 
-  const { close } = useBackToClose(true, () => {
+  const { close } = useBackToClose(open, () => {
+    setFailed(false); // 다시 열 때는 처음 모양으로
     onClose();
-    if (goAfterClose.current) onSaved(goAfterClose.current);
+    const href = goAfterClose.current;
+    goAfterClose.current = null;
+    if (href) onSaved(href);
   });
+  const boxRef = useDialogFocus<HTMLDivElement>(open, saving ? undefined : close);
 
-  // 새 버전 번호: 지금 버전 중 가장 큰 번호 + 1 (화면이 아직 못 불러왔을 때만)
+  // 새 버전 번호: 지금 버전 중 가장 큰 번호 + 1 (화면이 아직 못 불러왔을 때만, 창을 열 때)
   useEffect(() => {
-    if (knownNextNo !== null) return;
+    if (!open || knownNextNo !== null) return;
     let cancelled = false;
     void getEssay(result.essay_id).then((res) => {
       if (!cancelled && res.ok) setLoadedNextNo(Math.max(0, ...res.data.versions.map((v) => v.version_no)) + 1);
@@ -245,7 +253,7 @@ function SaveVersionDialog({
     return () => {
       cancelled = true;
     };
-  }, [knownNextNo, result.essay_id]);
+  }, [open, knownNextNo, result.essay_id]);
 
   const save = async () => {
     if (busy.current) return;
@@ -272,10 +280,12 @@ function SaveVersionDialog({
     setFailed(true);
   };
 
+  if (!open) return null;
+
   return (
     <Overlay align="center" onBackdropClick={saving ? undefined : close}>
-      <div role="alertdialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-sm rounded-2xl bg-surface p-5 shadow-xl">
-        <h2 id={titleId} className="text-[17px] font-bold leading-snug">
+      <div ref={boxRef} role="alertdialog" aria-modal="true" aria-labelledby={titleId} className="w-full max-w-sm rounded-2xl bg-surface p-5 shadow-xl outline-none">
+        <h2 id={titleId} className="text-[17px] font-bold leading-snug outline-none">
           {nextNo !== null ? `v${nextNo}로 저장할까요?` : "새 버전으로 저장할까요?"}
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-ink-soft">지금 보이는 글이 새 버전으로 저장돼요.</p>

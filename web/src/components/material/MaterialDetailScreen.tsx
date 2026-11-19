@@ -356,7 +356,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
       )}
 
       {/* M131 더보기 */}
-      <BottomSheet open={sheetOpen} onClose={onSheetClosed}>
+      <BottomSheet open={sheetOpen} onClose={onSheetClosed} ariaLabel="소재 메뉴">
         {({ close }) => (
           <div className="flex flex-col">
             <SheetItem
