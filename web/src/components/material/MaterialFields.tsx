@@ -205,7 +205,7 @@ export function MaterialFields({
                 onClick={() => toggleTopic(t.id)}
                 className={`inline-flex h-8 items-center rounded-full border px-3 text-[13px] ${
                   selected
-                    ? "border-ink bg-ink font-semibold text-white"
+                    ? "border-primary bg-primary font-semibold text-white"
                     : "border-line text-ink-soft active:bg-subtle"
                 }`}
               >
