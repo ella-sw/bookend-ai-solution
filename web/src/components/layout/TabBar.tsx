@@ -16,7 +16,7 @@ export default function TabBar({ pathname }: { pathname: string }) {
   return (
     <nav
       aria-label="주요 메뉴"
-      className="pb-safe fixed bottom-0 left-1/2 z-30 w-full max-w-(--app-max-width) -translate-x-1/2 border-t border-line bg-surface"
+      className="pb-safe fixed bottom-0 left-1/2 z-30 w-full max-w-(--app-max-width) -translate-x-1/2 border-t border-line bg-page"
     >
       <ul className="grid h-tabbar grid-cols-4">
         {tabs.map((tab) => {

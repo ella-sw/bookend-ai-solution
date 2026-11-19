@@ -5,7 +5,7 @@
  */
 export function BottomActionBar({ children }: { children: React.ReactNode }) {
   return (
-    <div className="fixed bottom-(--keyboard-inset) left-1/2 z-20 w-full max-w-(--app-max-width) -translate-x-1/2 border-t border-line/60 bg-surface px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+    <div className="fixed bottom-(--keyboard-inset) left-1/2 z-20 w-full max-w-(--app-max-width) -translate-x-1/2 border-t border-line/60 bg-page px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       {children}
     </div>
   );
