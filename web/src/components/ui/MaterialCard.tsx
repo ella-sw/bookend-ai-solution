@@ -46,7 +46,7 @@ export function MaterialCard({
       }`}
     >
       <div className="flex items-start justify-between gap-3">
-        <h3 className="line-clamp-1 text-[15px] font-semibold">{title}</h3>
+        <h3 className="line-clamp-1 font-serif text-[16px] font-semibold">{title}</h3>
         {status !== "kept" && (
           <Tag tone={status === "review" ? "accent" : status === "failed" ? "default" : "primary"}>
             {status === "analyzing" && <span aria-hidden className="mr-1 size-1.5 animate-pulse rounded-full bg-current" />}

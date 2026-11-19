@@ -12,7 +12,7 @@ export function Chip({
       type={type}
       aria-pressed={selected}
       className={`inline-flex h-8 shrink-0 items-center rounded-full border px-3 text-[13px] transition-colors ${
-        selected ? "border-ink bg-ink font-semibold text-white" : "border-line bg-surface text-ink-soft active:bg-subtle"
+        selected ? "border-primary bg-primary font-semibold text-white" : "border-line bg-surface text-ink-soft active:bg-subtle"
       } ${className}`}
       {...props}
     />
@@ -24,7 +24,7 @@ export function Tag({ children, tone = "default" }: { children: React.ReactNode;
   const tones = {
     default: "bg-subtle text-ink-soft",
     primary: "bg-primary-soft text-primary",
-    accent: "bg-accent-soft text-[#843c0c]",
+    accent: "bg-accent-soft text-accent-ink",
   };
   return <span className={`inline-flex h-6 items-center rounded-md px-2 text-xs ${tones[tone]}`}>{children}</span>;
 }
