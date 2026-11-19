@@ -393,7 +393,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
               disabled={editing}
               onClick={() => setVersionId(v.id)}
               className={`h-8 shrink-0 rounded-full border px-3 text-[13px] disabled:opacity-50 ${
-                v.id === version.id ? "border-ink bg-ink font-semibold text-white" : "border-line text-ink-soft active:bg-subtle"
+                v.id === version.id ? "border-primary bg-primary font-semibold text-white" : "border-line text-ink-soft active:bg-subtle"
               }`}
             >
               {v.label}
