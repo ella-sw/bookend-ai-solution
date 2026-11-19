@@ -9,6 +9,7 @@ Screen flow:
   L122 덮어쓰기        PUT  /essays/{id}/versions/{version_id}
   L122 새 버전 저장    POST /essays/{id}/versions → 다음 번호
   L121 글 삭제         DELETE /essays/{id}
+  L121 이 버전 지우기  DELETE /essays/{id}/versions/{version_id}
 
 Rules (ERD 1, 7, 12, 13, 16):
 - Direct writing has no 초안: the first save is v1. AI essays (coming with C's part) start
@@ -18,6 +19,8 @@ Rules (ERD 1, 7, 12, 13, 16):
 - essays.title is a copy of the latest version's title.
 - Deleted or unconfirmed materials can't be used for a new essay.
 - essay_saved (R33) is recorded for first save, new version and overwrite.
+- One version can be deleted, except 초안 (version 0) and the last remaining version.
+  Numbers are not renumbered; a new version is still max(version_no) + 1.
 """
 
 from datetime import datetime
@@ -419,6 +422,35 @@ async def save_new_version(essay_id: UUID, data: NewVersionIn, conn: ConsentedCo
          data.save_token, essay_id),
     )
     await _after_save(conn, essay_id, e["method"])
+    return await _essay(conn, essay_id)
+
+
+# ---------------------------------------------------------------------------
+# L121 이 버전 지우기
+# ---------------------------------------------------------------------------
+@router.delete("/{essay_id}/versions/{version_id}", response_model=Essay,
+               responses={404: {"description": "essay_not_found / version_not_found"},
+                          409: {"description": "version_not_deletable (초안 또는 마지막 버전)"}})
+async def delete_version(essay_id: UUID, version_id: UUID, conn: ConsentedConn) -> Essay:
+    """버전 하나를 지운다. 초안(version 0)과 마지막 남은 버전은 지울 수 없다 (글 삭제를 쓴다).
+    번호는 다시 매기지 않고, essays.title은 남은 최신 버전 제목으로 맞춘다 (ERD 13).
+    이 버전을 바탕으로 한 다른 버전의 based_on_version_id는 비워진다 (on delete set null)."""
+    await _lock_essay(conn, essay_id)
+    v = await (await conn.execute(
+        "select version_no, (select count(*) from essay_versions where essay_id = %s) as total "
+        "from essay_versions where id = %s and essay_id = %s",
+        (essay_id, version_id, essay_id),
+    )).fetchone()
+    if v is None:
+        raise _not_found("version_not_found")
+    if v["version_no"] == 0 or v["total"] <= 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="version_not_deletable")
+    await conn.execute("delete from essay_versions where id = %s", (version_id,))
+    await conn.execute(
+        "update essays set title = (select title from essay_versions where essay_id = %s "
+        "order by version_no desc limit 1) where id = %s",
+        (essay_id, essay_id),
+    )
     return await _essay(conn, essay_id)
 
 

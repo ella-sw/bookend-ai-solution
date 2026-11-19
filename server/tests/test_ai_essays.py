@@ -261,3 +261,41 @@ def test_other_user_cannot_regenerate_or_save(client, make_user):
     assert client.post(f"/essays/{e['id']}/regenerations/{r['request_id']}/save",
                        headers=auth(b), json={"save_token": tok()}).status_code == 404
     assert draft(client, b, [m]).status_code == 422  # A's material
+
+
+# ---------------------------------------------------------------------------
+# L121 이 버전 지우기 (AI 글)
+# ---------------------------------------------------------------------------
+def test_draft_version_cannot_be_deleted(client, make_user):
+    a = make_user()
+    m = material(client, a)
+    use_ai(RecordingAI())
+    e = draft(client, a, [m]).json()
+    v0 = e["versions"][0]
+    r = client.delete(f"/essays/{e['id']}/versions/{v0['id']}", headers=auth(a))
+    assert r.status_code == 409 and r.json()["detail"] == "version_not_deletable"
+
+
+def test_result_based_on_deleted_version_cannot_be_saved(client, make_user):
+    a = make_user()
+    m = material(client, a)
+    use_ai(RecordingAI())
+    e = draft(client, a, [m]).json()
+    v0 = e["versions"][0]
+    one = client.post(f"/essays/{e['id']}/regenerate", headers=auth(a), json={
+        "based_on_version_id": v0["id"], "style": "감성적", "length": "short"}).json()
+    v1 = client.post(f"/essays/{e['id']}/regenerations/{one['request_id']}/save",
+                     headers=auth(a), json={"save_token": tok()}).json()["versions"][1]
+
+    # an unsaved result based on v1, then v1 is deleted (e.g. in another tab)
+    r = client.post(f"/essays/{e['id']}/regenerate", headers=auth(a), json={
+        "based_on_version_id": v1["id"], "style": "감성적", "length": "short"}).json()
+    assert client.delete(f"/essays/{e['id']}/versions/{v1['id']}",
+                         headers=auth(a)).status_code == 200
+
+    s = client.post(f"/essays/{e['id']}/regenerations/{r['request_id']}/save",
+                    headers=auth(a), json={"save_token": tok()})
+    assert s.status_code == 404 and s.json()["detail"] == "version_not_found"
+    again = client.post(f"/essays/{e['id']}/regenerate", headers=auth(a), json={
+        "based_on_request_id": r["request_id"], "style": "감성적", "length": "short"})
+    assert again.status_code == 404 and again.json()["detail"] == "version_not_found"

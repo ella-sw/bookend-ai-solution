@@ -310,6 +310,7 @@ async def regenerate(essay_id: UUID, data: RegenerateIn, user: User, ai: AI) -> 
             r = prev["result"]
             base_title, base_body = r["title"], r["body"]
             version_id, count = UUID(r["based_on_version_id"]), r["regen_count"] + 1
+            await _require_version(conn, essay_id, version_id)  # L121: may have been deleted
 
         rows = await (await conn.execute(
             "select em.material_id, m.deleted_at is not null as deleted from essay_materials em "
@@ -347,6 +348,14 @@ async def regenerate(essay_id: UUID, data: RegenerateIn, user: User, ai: AI) -> 
     )
 
 
+async def _require_version(conn, essay_id: UUID, version_id) -> None:
+    """404 version_not_found if the base version no longer exists (deleted in L121)."""
+    if await (await conn.execute(
+            "select 1 from essay_versions where id = %s and essay_id = %s",
+            (version_id, essay_id))).fetchone() is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="version_not_found")
+
+
 # ---------------------------------------------------------------------------
 # W341 [저장하기]
 # ---------------------------------------------------------------------------
@@ -375,6 +384,8 @@ async def save_regeneration(essay_id: UUID, request_id: int, data: SaveRegenIn,
         if req is None or "body" not in req["result"]:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="no_result")
         r = req["result"]
+        # L121: the version this result was based on may have been deleted meanwhile
+        await _require_version(conn, essay_id, r["based_on_version_id"])
         await _insert_version(
             conn,
             """

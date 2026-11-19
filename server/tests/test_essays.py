@@ -219,6 +219,65 @@ def test_material_detail_lists_the_essay(client, make_user):
 
 
 # ---------------------------------------------------------------------------
+# L121 이 버전 지우기
+# ---------------------------------------------------------------------------
+def new_version(client, uid, essay_id, base_id, title):
+    return client.post(f"/essays/{essay_id}/versions", headers=auth(uid), json={
+        "title": title, "body": f"{title} 본문", "based_on_version_id": base_id,
+        "save_token": tok()}).json()
+
+
+def test_delete_one_version_keeps_numbers(client, make_user, owner):
+    a = make_user()
+    e = first_save(client, a, title="v1 제목").json()
+    v1 = e["versions"][0]
+    v2 = new_version(client, a, e["id"], v1["id"], "v2 제목")["versions"][1]
+    v3 = new_version(client, a, e["id"], v2["id"], "v3 제목")["versions"][2]
+    events_before = len(saved_events(owner, a))
+
+    # delete v2: v1·v3 remain, no renumbering, v3's base link is cleared
+    r = client.delete(f"/essays/{e['id']}/versions/{v2['id']}", headers=auth(a))
+    assert r.status_code == 200
+    assert [v["label"] for v in r.json()["versions"]] == ["v1", "v3"]
+    assert owner.execute("select based_on_version_id from essay_versions where id = %s",
+                         (v3["id"],)).fetchone()["based_on_version_id"] is None
+
+    # delete the latest (v3): title copy goes back to v1 (ERD 13)
+    r = client.delete(f"/essays/{e['id']}/versions/{v3['id']}", headers=auth(a))
+    assert [v["label"] for v in r.json()["versions"]] == ["v1"] and r.json()["title"] == "v1 제목"
+    assert len(saved_events(owner, a)) == events_before  # deleting is not a save
+
+    # the last remaining version can't be deleted (use 글 삭제)
+    r = client.delete(f"/essays/{e['id']}/versions/{v1['id']}", headers=auth(a))
+    assert r.status_code == 409 and r.json()["detail"] == "version_not_deletable"
+
+    # already deleted / wrong essay → 404
+    r = client.delete(f"/essays/{e['id']}/versions/{v2['id']}", headers=auth(a))
+    assert r.status_code == 404 and r.json()["detail"] == "version_not_found"
+
+
+def test_new_version_after_delete_is_max_plus_one(client, make_user):
+    a = make_user()
+    e = first_save(client, a).json()
+    v1 = e["versions"][0]
+    v2 = new_version(client, a, e["id"], v1["id"], "두 번째")["versions"][1]
+    new_version(client, a, e["id"], v1["id"], "세 번째")
+    client.delete(f"/essays/{e['id']}/versions/{v2['id']}", headers=auth(a))
+    vs = new_version(client, a, e["id"], v1["id"], "네 번째")["versions"]
+    assert [v["label"] for v in vs] == ["v1", "v3", "v4"]
+
+
+def test_other_user_cannot_delete_a_version(client, make_user):
+    a, b = make_user(), make_user()
+    e = first_save(client, a).json()
+    v1 = e["versions"][0]
+    v2 = new_version(client, a, e["id"], v1["id"], "두 번째")["versions"][1]
+    r = client.delete(f"/essays/{e['id']}/versions/{v2['id']}", headers=auth(b))
+    assert r.status_code == 404 and r.json()["detail"] == "essay_not_found"
+    assert len(client.get(f"/essays/{e['id']}", headers=auth(a)).json()["versions"]) == 2
+
+
+# ---------------------------------------------------------------------------
 # 접근
 # ---------------------------------------------------------------------------
 def test_other_user_cannot_touch_essays(client, make_user):
