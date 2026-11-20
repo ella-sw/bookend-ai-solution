@@ -32,6 +32,7 @@ import { getRegenResult, putRegenResult } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useDirectStart } from "@/components/newEssay/useDirectStart";
+import { readEssayDirection } from "@/lib/essayDirectionStore";
 
 const LIMIT_MESSAGE = "오늘 사용할 수 있는 횟수를 다 썼어요";
 
@@ -154,7 +155,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
       setInfo({
         materialIds: usable,
         materialTitles: usable.map((id) => byId.get(id)?.title?.trim() || "(제목 없음)"),
-        direction: sg && sg.ok ? sg.data.direction : null,
+        direction: readEssayDirection(params, sg && sg.ok ? sg.data.direction : null),
         suggestionId: sg && sg.ok ? sg.data.id : null,
       });
       setLoadFailed(false);
@@ -220,7 +221,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     const send = () =>
       createAiDraft({
         material_ids: info.materialIds,
-        direction: dropSuggestion.current ? null : info.direction,
+        direction: info.direction,
         style,
         length,
         suggestion_id: dropSuggestion.current ? null : info.suggestionId,
