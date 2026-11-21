@@ -6,7 +6,7 @@ import { AiUsageSheet } from "@/components/common/AiUsageSheet";
 import { ConfirmDialog, RetryNotice, ScreenHeader, Spinner, useToast } from "@/components/ui";
 import { clearAllData } from "@/lib/api";
 import { clearFinishedFlowMarks } from "@/lib/finishedFlow";
-import { clearEssayDirections } from "@/lib/essayDirectionStore";
+import { clearEssayRequests } from "@/lib/essayRequestStore";
 import { clearAllQnaInputs } from "@/lib/qnaInputStore";
 import { clearAllRegenResults } from "@/lib/regenResultStore";
 import { routes } from "@/lib/routes";
@@ -42,7 +42,7 @@ export default function SettingsPage() {
     if (res.ok) {
       clearAllRegenResults();
       clearFinishedFlowMarks();
-      clearEssayDirections();
+      clearEssayRequests();
       clearAllQnaInputs();
       toast("모든 기록을 지웠어요");
       router.replace(routes.home);

@@ -5,6 +5,7 @@ import type {
   ConfirmMaterialInput,
   DailyQuestions,
   EssayCard,
+  MaterialDeleted,
   MaterialDetail,
   CreateAiDraftInput,
   EditMaterialInput,
@@ -670,6 +671,7 @@ function essayOf(e: MockEssay): Essay {
     method: e.method,
     title: e.title,
     direction: e.direction,
+    request: e.request ?? null,
     created_at: e.created_at,
     updated_at: e.updated_at,
     materials: materialRefs(e.material_ids),
@@ -1227,11 +1229,21 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   },
 
   // M131 소재 삭제: 논리 삭제 (204). 원본 기록과 쓴 글은 남는다
-  "material.delete": ({ params }) => {
+  // M131 소재 삭제 (B delete_material): 글(직접 쓰기 임시 저장 포함)에 쓴 소재는 숨기기만,
+  // 안 쓴 소재는 원본 기록·문답·소재·주제 연결·관련 AI 요청까지 실제로 지운다
+  "material.delete": ({ params }): MaterialDeleted => {
+    const db = getDb();
     const material = liveMaterial(params.materialId);
-    material.deleted_at = now();
-    delete getDb().reanalyses[material.id];
-    return null;
+    const used = db.essays.some((e) => e.material_ids.includes(material.id));
+    if (used) {
+      material.deleted_at = now();
+      delete db.reanalyses[material.id];
+    } else {
+      // 같은 원본의 소재들과 그 AI 요청(다시 분석)도 함께
+      for (const m of db.materials) if (m.record_id === material.record_id) delete db.reanalyses[m.id];
+      removeRecords([material.record_id]);
+    }
+    return { record_deleted: !used };
   },
 
   // 목업 전용 (요청 없음): '다시 분석 결과 (M131)' 상황을 고르는 자리
@@ -1338,6 +1350,9 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     const { style, length } = checkStyleLength(input);
     const direction = typeof input.direction === "string" ? input.direction.trim() || null : null;
     if (direction && Array.from(direction).length > ESSAY_RULES.directionMax) fail("bad_request");
+    // B UserRequest: 앞뒤 공백 제거, 비면 null, 코드 포인트 200자 넘으면 422
+    const userRequest = typeof input.request === "string" ? input.request.trim() || null : null;
+    if (userRequest && Array.from(userRequest).length > ESSAY_RULES.requestMax) fail("bad_request");
     if (!input.save_token) fail("bad_request");
     const done = db.essays.find((e) => e.versions.some((v) => v.save_token === input.save_token));
     if (done) return essayOf(done);
@@ -1357,6 +1372,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       title: out.title,
       draft_body: null,
       direction,
+      request: userRequest,
       suggestion_id: input.suggestion_id ?? null,
       material_ids: ids,
       versions: [
