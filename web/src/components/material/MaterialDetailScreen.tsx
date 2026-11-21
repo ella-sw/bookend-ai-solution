@@ -63,6 +63,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
  * M130 소재 상세 + M131 더보기 (UI 설계서 v7 14쪽, 목록 11·22번, B materials.py)
  * - 소재 정보 · 원문(읽기 전용) · 사용한 글 · [이 소재로 글쓰기]
  * - ⋯ → M131: [소재 정보 고치기](요약·키워드·주제만) / [다시 분석] / [소재 삭제]
+ * - 소재 삭제 (B delete_material): 글(직접 쓰기 임시 저장 포함)에 쓴 소재는 숨기기만(원본 유지),
+ *   안 쓴 소재는 원본 기록까지 지운다. record_deleted로 토스트를 나눈다
  * - 다시 분석: 소재는 그대로, 결과가 reanalysis에 온다. 분석 중이면 2.5초마다 다시 불러온다 (최대 75초, 나가면 멈춤).
  *   done → 나란히 [바꾸기]/[그대로 두기], empty·failed → '새 결과가 없어 그대로 두었어요' [확인].
  *   서버가 결과를 들고 있으므로 화면을 나갔다 와도 비교가 이어진다
@@ -144,7 +146,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
 
   /* ---------- 동작 ---------- */
 
-  const run = async (kind: NonNullable<typeof acting>, fn: () => Promise<ApiResult<MaterialDetail | null>>) => {
+  const run = async <T,>(kind: NonNullable<typeof acting>, fn: () => Promise<ApiResult<T>>) => {
     if (busy.current) return null;
     busy.current = true;
     setActing(kind);
@@ -224,7 +226,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
     const res = await run("delete", () => deleteMaterial(materialId));
     if (!res) return;
     if (res.ok) {
-      toast("소재를 지웠어요");
+      toast(res.data.record_deleted ? "소재와 원본 기록을 지웠어요" : "소재를 지웠어요. 글에 쓴 원본은 남아 있어요");
       router.replace(routes.materials);
       return;
     }
@@ -382,7 +384,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
                 close();
               }}
             />
-            <p className="mt-2 px-1 text-xs text-ink-mute">쓴 글과 원본 기록은 남아요</p>
+            <p className="mt-2 px-1 text-xs text-ink-mute">글에 쓴 소재만 원본이 남아요</p>
           </div>
         )}
       </BottomSheet>
@@ -398,7 +400,7 @@ function MaterialDetailView({ materialId }: { materialId: string }) {
           }
         }}
         title="소재를 지울까요?"
-        description="소재만 지워지고 원본 기록은 남아요. 원본까지 지우려면 설정 > 모든 기록 삭제를 이용해 주세요."
+        description="글에 쓰지 않은 소재는 원본 기록까지 지워지고 되돌릴 수 없어요. 글에 쓴 소재는 소재만 지워지고 원본은 남아요."
         actions={[
           { label: "취소", onClick: () => (deleteChosen.current = false) },
           { label: "삭제", variant: "danger", onClick: () => (deleteChosen.current = true) },

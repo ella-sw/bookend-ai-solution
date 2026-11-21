@@ -198,6 +198,12 @@ export interface Reanalysis {
   result: Candidate | null;
 }
 
+/** M131 소재 삭제 결과 (B: MaterialDeleted) */
+export interface MaterialDeleted {
+  /** true = 글에 안 쓴 소재라 원본 기록까지 지움 / false = 글에 쓴 소재라 숨기기만 함 */
+  record_deleted: boolean;
+}
+
 /** 보관한 소재 상세 (B: MaterialDetail). POST /records/{id}/material, GET /materials/{id} */
 export interface MaterialDetail {
   id: Uuid;

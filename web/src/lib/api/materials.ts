@@ -5,6 +5,7 @@ import type {
   ConfirmMaterialInput,
   EditMaterialInput,
   MaterialBox,
+  MaterialDeleted,
   MaterialDetail,
   Original,
   RelatedMaterial,
@@ -160,11 +161,13 @@ export function dismissReanalysis(materialId: string) {
 }
 
 /**
- * M131 소재 삭제 (204): 논리 삭제. 원본 기록과 이미 쓴 글은 남는다 (목록 22번).
- * 그 원본은 소재함 목록에 다시 나오지 않는다
+ * M131 소재 삭제 (200 + { record_deleted }, B delete_material, 팀 결정 11/19).
+ * 글(직접 쓰기 임시 저장 포함)에 쓴 소재는 숨김(원본 유지), 안 쓴 소재는 원본까지 실제 삭제.
+ * 숨긴 소재는 이미 쓴 글에 '삭제된 소재'로 남고, 그 원본은 소재함 목록에 다시 나오지 않는다.
+ * 오류: 404 material_not_found
  */
 export function deleteMaterial(materialId: string) {
-  return request<null>({
+  return request<MaterialDeleted>({
     method: "DELETE",
     path: `/materials/${materialId}`,
     mock: { key: "material.delete", params: { materialId } },
