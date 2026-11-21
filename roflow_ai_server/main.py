@@ -5,6 +5,7 @@ from openai import OpenAI
 import os
 import re
 import json
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,14 +39,32 @@ app.add_middleware(
 )
 
 
+def _select_client_and_model(
+    default_client: OpenAI,
+    default_model: str | None,
+    model_override: str | None = None,
+) -> tuple[OpenAI, str]:
+    target_model = (model_override or "").strip() or (default_model or "")
+    if not target_model:
+        raise HTTPException(status_code=500, detail="모델명이 설정되지 않았습니다.")
+
+    lower_target = target_model.lower()
+    if (ESSAY_MODEL and target_model == ESSAY_MODEL) or "claude" in lower_target:
+        return essay_client, target_model
+    if (LOGIC_MODEL and target_model == LOGIC_MODEL) or "gpt" in lower_target:
+        return logic_client, target_model
+    return default_client, target_model
+
+
 def call_llm_json(
     client: OpenAI,
     model: str,
     messages: list,
     temperature: float | None = None,
     max_completion_tokens: int = 2000,
+    endpoint: str = "",
 ) -> dict:
-    """안전한 JSON 파싱 + 토큰 사용량 공통 처리"""
+    """안전한 JSON 파싱 + 응답 속도 및 토큰 사용량 로그 처리"""
     kwargs = {
         "model": model,
         "messages": messages,
@@ -55,7 +74,10 @@ def call_llm_json(
     if temperature is not None:
         kwargs["temperature"] = temperature
 
+    start_perf = time.perf_counter()
     response = client.chat.completions.create(**kwargs)
+    elapsed_sec = round(time.perf_counter() - start_perf, 3)
+
     raw = (response.choices[0].message.content or "").strip()
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
 
@@ -64,8 +86,17 @@ def call_llm_json(
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {e}")
 
-    result["input_tokens"] = response.usage.prompt_tokens if response.usage else 0
-    result["output_tokens"] = response.usage.completion_tokens if response.usage else 0
+    in_tokens = response.usage.prompt_tokens if response.usage else 0
+    out_tokens = response.usage.completion_tokens if response.usage else 0
+
+    result["input_tokens"] = in_tokens
+    result["output_tokens"] = out_tokens
+    result["latency_sec"] = elapsed_sec
+
+    print(
+        f"[{endpoint or model}] model={model} | latency={elapsed_sec}s | "
+        f"input_tokens={in_tokens}, output_tokens={out_tokens}"
+    )
     return result
 
 
@@ -83,9 +114,11 @@ def read_root():
 # ==========================================
 class ExtractRequest(BaseModel):
     record_text: str
+    model_override: str | None = None
 
 @app.post("/api/material/extract")
 def extract_material(req: ExtractRequest):
+    client, target_model = _select_client_and_model(logic_client, LOGIC_MODEL, req.model_override)
     system_prompt = """
     당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
     반드시 아래 JSON 형식으로만 응답하세요. 다른 말은 덧붙이지 마세요.
@@ -118,7 +151,14 @@ def extract_material(req: ExtractRequest):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": req.record_text},
     ]
-    return call_llm_json(logic_client, LOGIC_MODEL, messages, temperature=0.3, max_completion_tokens=1024)
+    return call_llm_json(
+        client,
+        target_model,
+        messages,
+        temperature=0.3,
+        max_completion_tokens=1024,
+        endpoint="/api/material/extract",
+    )
 
 
 # ==========================================
@@ -126,9 +166,11 @@ def extract_material(req: ExtractRequest):
 # ==========================================
 class QnARequest(BaseModel):
     chat_history: list
+    model_override: str | None = None
 
 @app.post("/api/qna/next")
 def get_next_question(req: QnARequest):
+    client, target_model = _select_client_and_model(logic_client, LOGIC_MODEL, req.model_override)
     system_prompt = """
     당신은 사용자의 일상과 기억을 자연스럽게 이끌어내는 전문 인터뷰어입니다.
     사용자의 이전 대화 기록을 분석하여, 글감을 구체화할 수 있는 '단 하나의 후속 질문'만 작성하세요.
@@ -149,7 +191,13 @@ def get_next_question(req: QnARequest):
     """
 
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
-    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=512)
+    return call_llm_json(
+        client,
+        target_model,
+        messages,
+        max_completion_tokens=512,
+        endpoint="/api/qna/next",
+    )
 
 
 # ==========================================
@@ -157,10 +205,12 @@ def get_next_question(req: QnARequest):
 # ==========================================
 class QnAAltRequest(BaseModel):
     chat_history: list
-    rejected_questions: list  # 사용자가 이미 본(스킵한) 질문들의 목록
+    rejected_questions: list
+    model_override: str | None = None
 
 @app.post("/api/qna/alternative")
 def get_alternative_question(req: QnAAltRequest):
+    client, target_model = _select_client_and_model(logic_client, LOGIC_MODEL, req.model_override)
     system_prompt = f"""
     당신은 사용자의 일상과 기억을 자연스럽게 이끌어내는 전문 인터뷰어입니다.
     사용자의 이전 대화 기록을 분석하여, 기존에 거절된 질문과는 완전히 다른 측면의 '단 하나의 새로운 후속 질문'을 작성하세요.
@@ -181,7 +231,13 @@ def get_alternative_question(req: QnAAltRequest):
     """
 
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
-    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=512)
+    return call_llm_json(
+        client,
+        target_model,
+        messages,
+        max_completion_tokens=512,
+        endpoint="/api/qna/alternative",
+    )
 
 
 # ==========================================
@@ -192,10 +248,12 @@ class DraftRequest(BaseModel):
     tone: str
     length: str
     direction: str
-    user_request: str | None = ""  # 사용자 추가 요청 (선택)
+    user_request: str | None = ""
+    model_override: str | None = None
 
 @app.post("/api/essay/draft")
 def generate_draft(req: DraftRequest):
+    client, target_model = _select_client_and_model(essay_client, ESSAY_MODEL, req.model_override)
     length_guide = "300자에서 500자 사이" if req.length == "단문" else "1000자에서 1500자 사이"
     style_guide = (
         "과도한 비유, 수식어, 극적인 감정 묘사를 배제하세요. 사건과 행동, 사용자가 실제로 한 생각만을 간결하고 절제된 문장으로 담백하게 서술하세요."
@@ -247,13 +305,13 @@ def generate_draft(req: DraftRequest):
         {"role": "user", "content": user_prompt},
     ]
     result = call_llm_json(
-        essay_client,
-        ESSAY_MODEL,
+        client,
+        target_model,
         messages,
         temperature=0.3,
         max_completion_tokens=2000,
+        endpoint="/api/essay/draft",
     )
-    # CoT용 중간 필드 제거 (기존 응답 스키마 유지)
     result.pop("allowed_facts", None)
     return result
 
@@ -266,10 +324,12 @@ class RetouchRequest(BaseModel):
     selected_materials: str
     tone: str
     length: str
-    user_request: str | None = ""  # 사용자 추가 요청 (선택)
+    user_request: str | None = ""
+    model_override: str | None = None
 
 @app.post("/api/essay/retouch")
 def retouch_draft(req: RetouchRequest):
+    client, target_model = _select_client_and_model(essay_client, ESSAY_MODEL, req.model_override)
     length_guide = "1000자에서 1500자 사이" if ("장문" in req.length or "길게" in req.length) else "300자에서 500자 사이"
     style_guide = (
         "비유와 감정 과장을 덜어내고, 사건과 행동을 중심으로 간결하고 절제된 담백한 문체로 다듬으세요."
@@ -326,24 +386,27 @@ def retouch_draft(req: RetouchRequest):
         {"role": "user", "content": user_prompt},
     ]
     result = call_llm_json(
-        essay_client,
-        ESSAY_MODEL,
+        client,
+        target_model,
         messages,
         temperature=0.3,
         max_completion_tokens=2000,
+        endpoint="/api/essay/retouch",
     )
-    # CoT용 중간 필드 제거 (기존 응답 스키마 유지)
     result.pop("preserved_facts", None)
     return result
+
 
 # ==========================================
 # 5. 글쓰기 제안 API (N130) -> LOGIC_MODEL
 # ==========================================
 class ProposalRequest(BaseModel):
     materials: list
+    model_override: str | None = None
 
 @app.post("/api/proposal/recommend")
 def recommend_proposal(req: ProposalRequest):
+    client, target_model = _select_client_and_model(logic_client, LOGIC_MODEL, req.model_override)
     system_prompt = """
     당신은 사용자의 일상 기록(소재)들을 분석하여 한 편의 글로 엮을 수 있을지 판단하고 기획안을 제안하는 전문 에디터입니다.
 
@@ -374,4 +437,10 @@ def recommend_proposal(req: ProposalRequest):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=1024)
+    return call_llm_json(
+        client,
+        target_model,
+        messages,
+        max_completion_tokens=1024,
+        endpoint="/api/proposal/recommend",
+    )
