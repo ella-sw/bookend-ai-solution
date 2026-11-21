@@ -203,6 +203,8 @@ export interface MockEssay {
   /** 임시 저장 본문 (저장하면 비움) */
   draft_body: string | null;
   direction: string | null;
+  /** 사용자 요청사항 (AI 글만). 없으면 null */
+  request?: string | null;
   suggestion_id: Uuid | null;
   /** 고른 순서대로 */
   material_ids: Uuid[];

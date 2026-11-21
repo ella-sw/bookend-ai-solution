@@ -670,6 +670,7 @@ function essayOf(e: MockEssay): Essay {
     method: e.method,
     title: e.title,
     direction: e.direction,
+    request: e.request ?? null,
     created_at: e.created_at,
     updated_at: e.updated_at,
     materials: materialRefs(e.material_ids),
@@ -1338,6 +1339,9 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     const { style, length } = checkStyleLength(input);
     const direction = typeof input.direction === "string" ? input.direction.trim() || null : null;
     if (direction && Array.from(direction).length > ESSAY_RULES.directionMax) fail("bad_request");
+    // B UserRequest: 앞뒤 공백 제거, 비면 null, 코드 포인트 200자 넘으면 422
+    const userRequest = typeof input.request === "string" ? input.request.trim() || null : null;
+    if (userRequest && Array.from(userRequest).length > ESSAY_RULES.requestMax) fail("bad_request");
     if (!input.save_token) fail("bad_request");
     const done = db.essays.find((e) => e.versions.some((v) => v.save_token === input.save_token));
     if (done) return essayOf(done);
@@ -1357,6 +1361,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       title: out.title,
       draft_body: null,
       direction,
+      request: userRequest,
       suggestion_id: input.suggestion_id ?? null,
       material_ids: ids,
       versions: [

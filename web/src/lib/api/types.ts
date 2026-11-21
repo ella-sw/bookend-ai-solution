@@ -353,6 +353,8 @@ export const ESSAY_RULES = {
   titleMax: 100,
   bodyMax: 20_000,
   directionMax: 200,
+  /** 사용자 요청 (B FirstDraftIn.request, 코드 포인트) */
+  requestMax: 200,
   materialsMax: 20,
 } as const;
 
@@ -402,7 +404,10 @@ export interface Essay {
   id: Uuid;
   method: "direct" | "ai";
   title: string | null;
+  /** 추천 흐름 (제안 direction) */
   direction: string | null;
+  /** 사용자 요청사항 (AI 글만, 선택). 다시 만들기에서는 바뀌지 않음 */
+  request: string | null;
   created_at: IsoTime;
   updated_at: IsoTime;
   materials: MaterialRef[];
@@ -443,7 +448,10 @@ export interface SaveEssayInput extends SaveEssayDraftInput {
 export interface CreateAiDraftInput {
   /** 고른 소재 (1개 이상), 고른 순서대로 */
   material_ids: Uuid[];
+  /** 추천 흐름 (제안 direction). 사용자가 빼면 null */
   direction?: string | null;
+  /** 사용자 요청사항 (선택, 200자). direction과 별개 */
+  request?: string | null;
   style: Style;
   length: EssayLength;
   suggestion_id?: Uuid | null;

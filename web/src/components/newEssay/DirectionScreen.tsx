@@ -9,18 +9,17 @@ import { newEssayHref, readNewEssayParams, type NewEssayParams } from "@/lib/new
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 import { useDirectStart } from "./useDirectStart";
-import { readEssayDirection, writeEssayDirection } from "@/lib/essayDirectionStore";
+import { moveEssayRequest } from "@/lib/essayRequestStore";
 
 /**
- * N120 고른 소재: 글의 방향은 선택 입력, 제안에서 왔으면 채워 주고 수정 가능.
+ * N120 고른 소재: 소재 확인·빼기·추가만. 추천 흐름·요청사항은 AI 초안 3단계(요청)에서 (목록 20번 변경)
  * - 고른 소재: 고른 순서대로, ×로 빼기
  * - [+ 소재 추가] → '소재 추가' 시트 (목록 4번, N110으로 넘어가지 않음): 불러온 소재 중 고르지 않은 것.
  *   여러 개 체크 → [추가 (n)] → 체크한 순서대로 m 뒤에 붙인다. 최대 ESSAY_RULES.materialsMax개를 넘지 않게 막고 안내.
  *   더 고를 소재가 없으면 버튼을 막고 '더 고를 소재가 없어요'
  *   소재 정보는 소재함(GET /materials)에서 찾는다. 없는 id(삭제됨)는 빼고 '삭제된 소재는 뺐어요'
- * - 방향은 최대 200자. 빈칸은 null. 흐름별로 이 탭에 보관하며 주소에는 넣지 않음.
  * - 소재 0개: [AI로 초안 만들기] 막고 버튼 위에 '소재를 1개 이상 골라 주세요'. [직접 쓰기]는 됨
- * - 빼거나 정리한 값은 주소(m·s)에도 바로 반영 → 새로고침해도 유지
+ * - 빼거나 정리한 값은 주소(m·s)에도 바로 반영 → 새로고침해도 유지. 없는 제안은 s를 빼고, 적어 둔 요청사항은 새 키로 옮김
  * - 흐름 id(f): 없으면(홈 제안 카드·N130에서 바로 옴) 만들어 주소에 붙인다. 다음 화면으로 그대로 넘김.
  *   이 흐름에서 글을 저장한 뒤 뒤로 가기로 오면 내 서재로 (목록 7번)
  *
@@ -47,7 +46,6 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
 
   const [params, setParams] = useState<NewEssayParams>(initial);
   const [materials, setMaterials] = useState<MaterialCard[] | null>(null);
-  const [direction, setDirection] = useState("");
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const cleaned = useRef(false);
@@ -79,7 +77,6 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
       }
       setMaterials(box.data.materials);
       setFailed(false);
-      setDirection(readEssayDirection(initial, sg && sg.ok ? sg.data.direction : null) ?? "");
       if (sg && !sg.ok && goOnboardingIfNeeded(sg.error)) return;
 
       // 처음 한 번: 없는 소재(삭제됨)·없는 제안을 정리
@@ -90,7 +87,7 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
       if (usable.length !== initial.m.length) toast("삭제된 소재는 뺐어요");
       if (usable.length !== initial.m.length || dropSuggestion) {
         const next = { ...initial, m: usable, s: dropSuggestion ? null : initial.s };
-        if (dropSuggestion) writeEssayDirection(next, readEssayDirection(initial) ?? "");
+        if (dropSuggestion) moveEssayRequest(initial, next);
         setParams(next);
         router.replace(newEssayHref(routes.newDirection, next), { scroll: false });
       }
@@ -192,26 +189,6 @@ function Direction({ initial, urlHasFlow }: { initial: NewEssayParams; urlHasFlo
           </div>
         </section>
 
-        <section className="flex flex-col gap-1.5">
-          <label htmlFor="essay-direction" className="text-sm font-semibold text-ink-soft">글의 방향 (선택)</label>
-          <textarea
-            id="essay-direction"
-            value={direction}
-            rows={3}
-            aria-describedby="direction-help direction-count"
-            placeholder="어떤 이야기를 담고 싶나요?"
-            onChange={(event) => {
-              const value = Array.from(event.target.value).slice(0, ESSAY_RULES.directionMax).join("");
-              setDirection(value);
-              writeEssayDirection(params, value);
-            }}
-            className="w-full resize-none rounded-xl border border-line bg-surface px-4 py-3 text-[15px] leading-relaxed focus:border-primary focus:outline-none"
-          />
-          <div className="flex justify-between gap-2 text-xs text-ink-mute">
-            <p id="direction-help">입력하지 않아도 진행할 수 있어요.</p>
-            <p id="direction-count">{Array.from(direction).length}/{ESSAY_RULES.directionMax}</p>
-          </div>
-        </section>
       </div>
 
       <BottomActionBarSpacer />
