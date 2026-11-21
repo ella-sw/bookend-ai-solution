@@ -705,7 +705,7 @@ function checkEssayInput(body: unknown) {
   const ids = Array.isArray(input.material_ids) ? input.material_ids : [];
   if (title !== null && title.length > ESSAY_RULES.titleMax) fail("bad_request");
   if (text.length > ESSAY_RULES.bodyMax) fail("bad_request");
-  if (direction !== null && direction.length > ESSAY_RULES.directionMax) fail("bad_request");
+  if (direction !== null && Array.from(direction).length > ESSAY_RULES.directionMax) fail("bad_request");
   if (ids.length > ESSAY_RULES.materialsMax) fail("bad_request");
   const db = getDb();
   const unique = Array.from(new Set(ids));
@@ -1337,7 +1337,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     if (ids.length < 1 || ids.length > ESSAY_RULES.materialsMax) fail("bad_request");
     const { style, length } = checkStyleLength(input);
     const direction = typeof input.direction === "string" ? input.direction.trim() || null : null;
-    if (direction && direction.length > ESSAY_RULES.directionMax) fail("bad_request");
+    if (direction && Array.from(direction).length > ESSAY_RULES.directionMax) fail("bad_request");
     if (!input.save_token) fail("bad_request");
     const done = db.essays.find((e) => e.versions.some((v) => v.save_token === input.save_token));
     if (done) return essayOf(done);

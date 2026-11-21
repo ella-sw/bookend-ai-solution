@@ -30,6 +30,7 @@ import { isNewEssayDone, markNewEssayDone, useLeaveFinishedFlow } from "@/lib/fi
 import { readNewEssayParams, writingStartedProps, type NewEssayParams } from "@/lib/newEssayParams";
 import { routes } from "@/lib/routes";
 import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
+import { readEssayDirection } from "@/lib/essayDirectionStore";
 
 type Snapshot = { title: string; body: string };
 type ExitChoice = "saveAndLeave" | "leave" | null;
@@ -58,7 +59,7 @@ async function loadContext(params: NewEssayParams, resume: boolean): Promise<{ o
     // 이어 쓸 글이 없으면 소재 없이 새로 (지금 고른 값은 주소에 없음)
     return { ok: true, ctx: emptyContext(), notice: "이어 쓸 글이 없어요" };
   }
-  if (params.m.length === 0 && !params.s) return { ok: true, ctx: emptyContext() };
+  if (params.m.length === 0 && !params.s) return { ok: true, ctx: { ...emptyContext(), direction: readEssayDirection(params) } };
   const [box, sg] = await Promise.all([getMaterialBox(), params.s ? getSuggestion(params.s) : Promise.resolve(null)]);
   if (!box.ok) return { ok: false, res: box };
   const byId = new Map(box.data.materials.map((m) => [m.id, m]));
@@ -69,7 +70,7 @@ async function loadContext(params: NewEssayParams, resume: boolean): Promise<{ o
       essayId: null,
       materialIds: usable,
       materialTitles: usable.map((id) => byId.get(id)?.title?.trim() || "(제목 없음)"),
-      direction: sg && sg.ok ? sg.data.direction : null,
+      direction: readEssayDirection(params, sg && sg.ok ? sg.data.direction : null),
       suggestionId: sg && sg.ok ? sg.data.id : null,
       title: "",
       body: "",
