@@ -59,6 +59,7 @@ RETRY_MIN_SECONDS = 5  # don't start the length retry with less time than this l
 Style = Literal["감성적", "담백함"]
 Length = Literal["short", "long"]
 Direction = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
+UserRequest = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,8 @@ class FirstDraftIn(BaseModel):
     material_ids: Annotated[list[UUID], Field(min_length=1, max_length=20,
                                               description="고른 소재 (1개 이상), 고른 순서대로")]
     direction: Direction | None = None
+    request: UserRequest | None = Field(
+        default=None, description="사용자 요청 (선택, 200자). direction과 별개로 AI에 전달·저장")
     style: Style
     length: Length
     suggestion_id: UUID | None = None
@@ -127,13 +130,14 @@ async def _material_inputs(conn: AsyncConnection, ids: list[UUID]) -> list[dict]
 
 
 def _draft_input(materials: list[dict], direction: str | None, style: str, length: str,
-                 base_title: str | None = None, base_body: str | None = None) -> DraftInput:
+                 base_title: str | None = None, base_body: str | None = None,
+                 user_request: str | None = None) -> DraftInput:
     lo, hi = LENGTHS[length]
     return DraftInput(
         materials=[MaterialInput(m["title"], m["summary"], m["evidence"], m["original"])
                    for m in materials],
         direction=direction, style=style, length=length, min_chars=lo, max_chars=hi,
-        base_title=base_title, base_body=base_body,
+        base_title=base_title, base_body=base_body, user_request=user_request,
     )
 
 
@@ -235,7 +239,8 @@ async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response
             "insert into ai_requests (user_id, kind, target_type, target_id) "
             "values (auth.uid(), 'draft', 'essay', %s) returning id", (essay_id,))).fetchone()
 
-    inp = _draft_input(materials, data.direction or None, data.style, data.length)
+    inp = _draft_input(materials, data.direction or None, data.style, data.length,
+                       user_request=data.request or None)
     out, used, tokens_in, tokens_out = await _run(user, req["id"], ai, inp)
 
     gone = False
@@ -266,9 +271,10 @@ async def _save_first_draft(conn: AsyncConnection, essay_id: UUID, ids: list[UUI
                             materials: list[dict], request_id: int) -> Essay:
     """Insert the essay, its materials and 초안 (version 0)."""
     await conn.execute(
-        "insert into essays (id, user_id, method, status, title, direction, suggestion_id) "
-        "values (%s, auth.uid(), 'ai', 'saved', %s, %s, %s)",
-        (essay_id, out.title.strip() or None, data.direction or None, data.suggestion_id))
+        "insert into essays (id, user_id, method, status, title, direction, request, "
+        "suggestion_id) values (%s, auth.uid(), 'ai', 'saved', %s, %s, %s, %s)",
+        (essay_id, out.title.strip() or None, data.direction or None, data.request or None,
+         data.suggestion_id))
     await conn.execute(
         "insert into essay_materials (essay_id, material_id, seq) "
         "select %s, m, n from unnest(%s::uuid[]) with ordinality as t(m, n)",
@@ -301,7 +307,7 @@ async def regenerate(essay_id: UUID, data: RegenerateIn, user: User, ai: AI) -> 
     async with user_tx(user.id) as conn:
         await require_consent(conn)
         essay = await (await conn.execute(
-            "select id, direction from essays where id = %s and user_id = auth.uid() "
+            "select id, direction, request from essays where id = %s and user_id = auth.uid() "
             "and status = 'saved' for update", (essay_id,))).fetchone()
         if essay is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="essay_not_found")
@@ -337,7 +343,8 @@ async def regenerate(essay_id: UUID, data: RegenerateIn, user: User, ai: AI) -> 
             "values (auth.uid(), 'regen', 'essay', %s) returning id", (essay_id,))).fetchone()
 
     inp = _draft_input(materials, essay["direction"], data.style, data.length,
-                       base_title=base_title, base_body=base_body)
+                       base_title=base_title, base_body=base_body,
+                       user_request=essay["request"])
     out, used, tokens_in, tokens_out = await _run(user, req["id"], ai, inp)
     result = {
         "title": out.title.strip() or base_title or "", "body": out.body,

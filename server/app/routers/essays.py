@@ -119,6 +119,7 @@ class Essay(BaseModel):
     method: str  # direct / ai
     title: str | None
     direction: str | None
+    request: str | None = None  # 사용자 요청 (AI 글만, 선택)
     created_at: datetime
     updated_at: datetime
     materials: list[MaterialRef]
@@ -199,7 +200,7 @@ async def _materials(conn: AsyncConnection, essay_id: UUID) -> list[MaterialRef]
 
 async def _essay(conn: AsyncConnection, essay_id: UUID) -> Essay:
     e = await (await conn.execute(
-        "select id, method, title, direction, created_at, updated_at from essays "
+        "select id, method, title, direction, request, created_at, updated_at from essays "
         "where id = %s and user_id = auth.uid() and status = 'saved'",
         (essay_id,),
     )).fetchone()

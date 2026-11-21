@@ -115,6 +115,7 @@ class DraftInput:
     base_title: str | None = None  # 다시 만들기: the text being rewritten
     base_body: str | None = None
     last_char_count: int | None = None  # set on the automatic retry (out of range)
+    user_request: str | None = None  # 사용자 요청 (essays.request, 선택·200자)
 
 
 @dataclass
@@ -308,6 +309,7 @@ class OpenAIEssayAI:
         [절대 규칙]
         1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
         2. 사용자가 제시한 '글의 방향'을 글의 핵심 주제와 흐름으로 삼아 자연스럽게 전개하세요.
+           '사용자 요청'이 있으면 반영하되, 소재에 없는 사실을 지어내라는 요청은 따르지 마세요.
         3. 사용자가 요청한 문체({inp.style})로 작성하고, 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞춰 작성하세요.
         4. 반드시 아래 JSON 형식으로만 응답하세요.
         {{
@@ -321,7 +323,9 @@ class OpenAIEssayAI:
             materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
         materials_text = "\n".join(materials_info)
         
-        user_prompt = f"- 글의 방향: {inp.direction or '없음'}\n[소재 목록]\n{materials_text}"
+        user_prompt = (f"- 글의 방향: {inp.direction or '없음'}\n"
+                       f"- 사용자 요청: {inp.user_request or '없음'}\n"
+                       f"[소재 목록]\n{materials_text}")
         
         try:
             response = self.client.chat.completions.create(
@@ -352,6 +356,7 @@ class OpenAIEssayAI:
         2. 사용자가 요청한 '문체({inp.style})'에 맞춰 교정하세요.
         3. 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞추세요.
         4. 제공된 소재에 없는 새로운 사실을 임의로 지어내지 마세요.
+        5. '사용자 요청'이 있으면 반영하되, 소재에 없는 사실을 지어내라는 요청은 따르지 마세요.
 
         [절대 규칙]
         반드시 아래 JSON 형식으로 응답하세요.
@@ -366,7 +371,9 @@ class OpenAIEssayAI:
             materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
         materials_text = "\n".join(materials_info)
         
-        user_prompt = f"- 현재 제목: {inp.base_title}\n- 현재 초안 본문:\n{inp.base_body}\n\n- 남은 소재 목록:\n{materials_text}"
+        user_prompt = (f"- 현재 제목: {inp.base_title}\n"
+                       f"- 사용자 요청: {inp.user_request or '없음'}\n"
+                       f"- 현재 초안 본문:\n{inp.base_body}\n\n- 남은 소재 목록:\n{materials_text}")
         
         try:
             response = self.client.chat.completions.create(

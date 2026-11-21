@@ -320,3 +320,38 @@ def test_material_deleted_during_the_ai_call(client, make_user, owner):
     assert count(owner, "select count(*) n from ai_requests where user_id = %s "
                         "and kind = 'draft' and status = 'discarded'", a) == 1
 
+
+
+# ---------------------------------------------------------------------------
+# 사용자 요청 (essays.request, A 요청 11/21)
+# ---------------------------------------------------------------------------
+def test_user_request_is_saved_and_sent_on_draft_and_regenerate(client, make_user, owner):
+    a = make_user()
+    m = material(client, a)
+    ai = use_ai(RecordingAI())
+    r = draft(client, a, [m], direction="가족의 마음", request="  엄마에게 쓰는 편지처럼  ")
+    assert r.status_code == 201
+    e = r.json()
+    assert e["request"] == "엄마에게 쓰는 편지처럼" and e["direction"] == "가족의 마음"
+    assert ai.inputs[-1].user_request == "엄마에게 쓰는 편지처럼"
+    assert ai.inputs[-1].direction == "가족의 마음"  # direction과 따로 간다
+    gen = owner.execute("select generation_input from essay_versions where essay_id = %s",
+                        (e["id"],)).fetchone()["generation_input"]
+    assert gen["user_request"] == "엄마에게 쓰는 편지처럼"  # 보낸 그대로 보관 (ERD 11)
+
+    # 다시 만들기: 저장된 요청을 그대로 넣는다
+    client.post(f"/essays/{e['id']}/regenerate", headers=auth(a), json={
+        "based_on_version_id": e["versions"][0]["id"], "style": "담백함", "length": "short"})
+    assert ai.inputs[-1].user_request == "엄마에게 쓰는 편지처럼"
+    assert client.get(f"/essays/{e['id']}", headers=auth(a)).json()["request"] == "엄마에게 쓰는 편지처럼"
+
+
+def test_user_request_is_optional_and_limited(client, make_user):
+    a = make_user()
+    m = material(client, a)
+    ai = use_ai(RecordingAI())
+    e = draft(client, a, [m]).json()
+    assert e["request"] is None and ai.inputs[-1].user_request is None
+    assert draft(client, a, [m], request="   ").json()["request"] is None  # 빈칸 = 없음
+    r = draft(client, a, [m], request="가" * 201)
+    assert r.status_code == 422
