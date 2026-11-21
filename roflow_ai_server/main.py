@@ -1,43 +1,85 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
 import os
+import re
 import json
 from dotenv import load_dotenv
 
-# .env 파일에 적어둔 API 키와 모델명을 불러옵니다.
 load_dotenv()
-MODEL_NAME = os.getenv("OPENAI_MODEL")
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-    # api_key=os.getenv("ELICE_API_KEY"),
-    # base_url=os.getenv("ELICE_BASE_URL")
+# ==========================================
+# 모델 라우팅 설정 (하이브리드 기본 / 단일 모델도 가능)
+# - LOGIC (소재 추출, 후속 질문, 글쓰기 제안): GPT-5.4
+# - ESSAY (에세이 생성, 에세이 재생성): Claude Sonnet 5
+# ==========================================
+LOGIC_MODEL = os.getenv("LOGIC_LLM_MODEL", os.getenv("LLM_MODEL"))
+ESSAY_MODEL = os.getenv("ESSAY_LLM_MODEL", os.getenv("LLM_MODEL"))
+
+logic_client = OpenAI(
+    api_key=os.getenv("LOGIC_API_KEY", os.getenv("ELICE_API_KEY")),
+    base_url=os.getenv("LOGIC_BASE_URL", os.getenv("LLM_BASE_URL")),
 )
 
-app = FastAPI(title="Rowflow AI API Server", version="1.0")
+essay_client = OpenAI(
+    api_key=os.getenv("ESSAY_API_KEY", os.getenv("ELICE_API_KEY")),
+    base_url=os.getenv("ESSAY_BASE_URL", os.getenv("LLM_BASE_URL")),
+)
 
-# ==========================================
-# [피드백 ④ 반영] CORS 설정 추가
-# ==========================================
+app = FastAPI(title="Rowflow AI API Server", version="2.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 나중에 Vercel 도메인이 나오면 해당 도메인만 허용하도록 바꿀 수 있습니다.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+def call_llm_json(
+    client: OpenAI,
+    model: str,
+    messages: list,
+    temperature: float | None = None,
+    max_completion_tokens: int = 2000,
+) -> dict:
+    """안전한 JSON 파싱 + 토큰 사용량 공통 처리"""
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "max_completion_tokens": max_completion_tokens,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
+    response = client.chat.completions.create(**kwargs)
+    raw = (response.choices[0].message.content or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+
+    try:
+        result = json.loads(cleaned, strict=False)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {e}")
+
+    result["input_tokens"] = response.usage.prompt_tokens if response.usage else 0
+    result["output_tokens"] = response.usage.completion_tokens if response.usage else 0
+    return result
+
+
 @app.get("/")
 def read_root():
     return {
         "message": "Rowflow AI 서버가 정상 작동 중입니다!",
-        "current_model": MODEL_NAME,
+        "logic_model": LOGIC_MODEL,
+        "essay_model": ESSAY_MODEL,
     }
 
+
 # ==========================================
-# 1. 소재 추출 API (M120)
+# 1. 소재 추출 API (M120) -> LOGIC_MODEL
 # ==========================================
 class ExtractRequest(BaseModel):
     record_text: str
@@ -72,24 +114,15 @@ def extract_material(req: ExtractRequest):
     - 중심 내용과 무관한 도입부 단어(예: 목소리 녹음이 핵심인 글에서 아침에 쏟은 '커피'), 원문에 없는 추상적 해석 단어('성취감', '자아', '무감정'), 핵심 의미가 없는 일반 시간 표현('평일', '오늘')은 키워드에서 절대 제외하세요.
     """
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": req.record_text}
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.3
-    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": req.record_text},
+    ]
+    return call_llm_json(logic_client, LOGIC_MODEL, messages, temperature=0.3, max_completion_tokens=1024)
 
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
-    return result
 
 # ==========================================
-# 2. AI 다음 질문 생성 API (W210)
+# 2. AI 다음 질문 생성 API (W210) -> LOGIC_MODEL
 # ==========================================
 class QnARequest(BaseModel):
     chat_history: list
@@ -114,21 +147,13 @@ def get_next_question(req: QnARequest):
     4. 감각 및 장면 구체화 유도:
     - 사용자가 어떤 장면을 어떻게 설명할지 막막해한다면, 추상적인 '감정'이나 '생각/의미'를 묻지 말고 눈에 보인 모양, 빛, 크기, 소리, 행동 등 구체적인 감각 요소 중 딱 한 가지를 쉽게 떠올릴 수 있도록 질문하세요.
     """
-    messages = [{"role": "system", "content": system_prompt}] + req.chat_history
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        response_format={"type": "json_object"},
-    )
 
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
-    return result
+    messages = [{"role": "system", "content": system_prompt}] + req.chat_history
+    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=512)
+
 
 # ==========================================
-# 2-2. AI 다른 질문 보기 (재생성) API (W220)
+# 2-2. AI 다른 질문 보기 (재생성) API (W220) -> LOGIC_MODEL
 # ==========================================
 class QnAAltRequest(BaseModel):
     chat_history: list
@@ -154,28 +179,20 @@ def get_alternative_question(req: QnAAltRequest):
     - 예를 들어 기존 질문이 '기분/감정/생각'을 물었다면, 다시 생각이나 감정을 묻지 말고 '구체적인 주변 상황이나 장면', '그 행동을 처음 결심한 계기', '이전이나 이후의 구체적 행동' 등 완전히 새로운 측면에서 질문하세요.
     4. 사용자가 말하지 않은 보람, 두려움, 실패 등을 임의로 전제하지 마세요.
     """
+
     messages = [{"role": "system", "content": system_prompt}] + req.chat_history
+    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=512)
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        response_format={"type": "json_object"},
-    )
-
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
-    return result
 
 # ==========================================
-# 3. AI 에세이 초안 생성 API (W330)
+# 3. AI 에세이 초안 생성 API (W330) -> ESSAY_MODEL
 # ==========================================
 class DraftRequest(BaseModel):
     materials: list
     tone: str
     length: str
     direction: str
+    user_request: str | None = ""  # 사용자 추가 요청 (선택)
 
 @app.post("/api/essay/draft")
 def generate_draft(req: DraftRequest):
@@ -183,27 +200,37 @@ def generate_draft(req: DraftRequest):
     style_guide = (
         "과도한 비유, 수식어, 극적인 감정 묘사를 배제하세요. 사건과 행동, 사용자가 실제로 한 생각만을 간결하고 절제된 문장으로 담백하게 서술하세요."
         if ("담백" in req.tone or "담담" in req.tone)
-        else "원문에 있는 감각(소리, 냄새, 풍경 등)과 여운을 부드럽고 풍부한 문장 호흡으로 묘사하세요. 단, 감성적인 분위기를 내기 위해 원문에 없는 사건·배경·감정·인물(이별, 친구, 특정 색깔의 물감, 가게 조명 등)을 절대 지어내지 마세요."
+        else "감성 문체는 원문에 없는 풍경·소리·감정·배경을 덧붙이는 것이 아니라, 원문에 이미 있는 사실과 감각의 문장 호흡과 여운만 부드럽게 다듬는 것입니다. 감성적인 분위기를 내기 위해 원문에 없는 사건·배경·조명·날씨·감정·인물을 절대 지어내지 마세요."
     )
+    user_request_text = (req.user_request or "").strip() or "없음"
 
     system_prompt = f"""
     당신은 사용자의 실제 기록만을 바탕으로 에세이를 작성하는 전문 작가입니다.
 
-    [1차 평가 필수 개선 및 절대 규칙]
-    1. 원문 충실성 및 창작(환각) 절대 금지 (가장 중요):
-    - 제공된 '소재'에 없는 새로운 사건, 배경, 인물, 사물의 외관이나 조명, 주변 사람들을 절대 지어내지 마세요. (예: 대학 시절 구매 목적, 친구와의 연주, 캔버스와 특정 물감 색상, 빵집의 나무 문과 조명 등 창작 금지)
+    [규칙 우선순위 — 규칙 간 충돌 시 1순위가 절대 우선]
+    1순위: 원문 사실 100% 엄수 (창작·추론·미세 묘사 덧붙이기 절대 금지)
+    2순위: 사용자 추가 요청 및 요청 문체({req.tone}) 준수
+    3순위: 목표 분량({length_guide}) 준수
+
+    [절대 규칙]
+    1. 원문 충실성 엄수 및 창작(환각) 절대 금지 (최우선):
+    - 제공된 '소재'에 없는 새로운 사건, 배경, 시간대, 날씨, 조명, 사물의 외관, 주변 사람의 표정·반응을 절대 지어내지 마세요. (예: 대학 시절 구매 목적, 친구와의 연주, 캔버스와 특정 물감 색상, 빵집의 나무 문과 조명 등 창작 금지)
     - 사용자가 언급하지 않은 감정(두려움, 긴장, 포기하고 싶은 유혹, 후회, 성취감, 자유 등)이나 사건 간의 임의적 인과관계(예: 쉬었기 때문에 봄에 산책할 수 있었다 등)를 추가하지 마세요.
-    - 글 마지막에 원문에 없는 교훈, 인생에 대한 깨달음, 거창한 다짐이나 향후 계획을 덧붙여 마무리하지 마세요. 오직 사용자가 기록한 마지막 생각이나 행동에서 글을 맺으세요.
+    - 글 마지막에 원문에 없는 교훈, 인생에 대한 깨달음, 거창한 다짐이나 향후 계획을 덧붙여 마무리하지 마세요. 오직 사용자가 기록한 마지막 생각이나 행동에서 담담하게 글을 맺으세요.
     2. 소재 연결 및 글의 방향:
     - 사용자가 제시한 '글의 방향'을 중심으로 전개하되, 서로 다른 시기나 날의 일을 같은 날 일어난 일처럼 합치지 마세요.
     3. 문체 조건 ({req.tone}):
     - {style_guide}
-    4. 분량 조건 (공백 포함 **{length_guide}** 엄격 준수):
-    - 본문 글자 수가 공백을 포함하여 반드시 **{length_guide}** 안에 들어와야 합니다. (500자 초과 또는 300자/1000자 미달 금지)
-    - 분량을 채울 때는 새로운 사실을 창작하지 말고, 원문에 제시된 상황의 맥락과 행동의 흐름, 명시된 생각의 결을 차분하고 밀도 있게 풀어서 서술하세요.
-    5. 반드시 아래 JSON 형식으로만 응답하세요.
+    4. 분량 조건 (목표: 공백 포함 {length_guide}):
+    - 원문에 제시된 상황의 맥락, 행동의 흐름, 명시된 생각의 결을 차분하게 풀어내어 목표 분량({length_guide})에 맞추려 노력하되, **분량을 채우기 위해 원문에 없는 사실·감정·배경을 추가하는 것은 무조건 실패**입니다.
+    - 제공된 소재의 양이 적어 목표 분량에 못 미치더라도 절대 내용을 지어내지 말고, `allowed_facts` 범위 안에서만 자연스럽게 완결하세요.
+    5. 사용자 추가 요청 반영:
+    - '사용자 추가 요청'이 '없음'이 아닌 경우, 원문 사실관계를 왜곡하거나 없는 내용을 창작하지 않는 범위 내에서 해당 요청(강조 포인트, 전개 방식, 제외할 내용 등)을 충실히 반영하세요.
+    6. 반드시 아래 JSON 형식으로만 응답하세요.
+    - 먼저 `allowed_facts`에 소재에서 확인된 사실만 나열한 뒤, `essay_content`는 오직 `allowed_facts`에 포함된 사실만 조합하여 작성하세요.
     {{
-        "essay_content": "작성된 에세이 초안 본문"
+        "allowed_facts": ["소재에 명시된 사실1", "소재에 명시된 사실2"],
+        "essay_content": "allowed_facts의 사실만을 사용해 작성한 에세이 초안 본문"
     }}
     """
 
@@ -211,32 +238,35 @@ def generate_draft(req: DraftRequest):
         f"- 글의 방향: {req.direction}\n"
         f"- 요청 문체: {req.tone}\n"
         f"- 목표 분량: 공백 포함 {length_guide}\n"
+        f"- 사용자 추가 요청: {user_request_text}\n"
         f"- 소재 목록:\n{req.materials}"
     )
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        response_format={"type": "json_object"},
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    result = call_llm_json(
+        essay_client,
+        ESSAY_MODEL,
+        messages,
+        temperature=0.3,
+        max_completion_tokens=2000,
     )
-
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
+    # CoT용 중간 필드 제거 (기존 응답 스키마 유지)
+    result.pop("allowed_facts", None)
     return result
 
+
 # ==========================================
-# 4. AI 글 다시 만들기 (재생성) API (W340)
+# 4. AI 글 다시 만들기 (재생성) API (W340) -> ESSAY_MODEL
 # ==========================================
 class RetouchRequest(BaseModel):
     current_draft: str
     selected_materials: str
     tone: str
     length: str
+    user_request: str | None = ""  # 사용자 추가 요청 (선택)
 
 @app.post("/api/essay/retouch")
 def retouch_draft(req: RetouchRequest):
@@ -244,29 +274,39 @@ def retouch_draft(req: RetouchRequest):
     style_guide = (
         "비유와 감정 과장을 덜어내고, 사건과 행동을 중심으로 간결하고 절제된 담백한 문체로 다듬으세요."
         if ("담백" in req.tone or "담담" in req.tone)
-        else "원문의 사실과 감정을 그대로 유지하면서, 감각적인 묘사와 부드러운 문장 호흡을 살려 감성적인 분위기가 자연스럽게 드러나도록 다듬으세요."
+        else "감성 문체는 원문에 없는 풍경·감정·배경을 덧붙이는 것이 아니라, 원문과 사용자 수정본에 이미 있는 사실·감정의 문장 호흡과 여운만 부드럽게 다듬는 것입니다. 감성적인 분위기를 위해 새로운 묘사를 창작하지 마세요."
     )
+    user_request_text = (req.user_request or "").strip() or "없음"
 
     system_prompt = f"""
     당신은 사용자의 수정 의도와 원문 사실관계를 완벽히 존중하는 에세이 전문 교정 편집자입니다.
-    사용자가 '직접 수정한 현재 초안(current_draft)'을 바탕으로 요청한 문체와 목표 분량에 맞게 에세이를 다시 작성해 주세요.
+    사용자가 '직접 수정한 현재 초안(current_draft)'을 바탕으로 요청한 문체, 목표 분량, 사용자 추가 요청에 맞게 에세이를 다시 작성해 주세요.
 
-    [1차 평가 필수 개선 및 절대 규칙]
-    1. 사용자 수정본(current_draft)의 사실관계·의도·부정 표현 완벽 보존 (가장 중요):
+    [규칙 우선순위 — 규칙 간 충돌 시 1순위가 절대 우선]
+    1순위: 사용자 수정본(current_draft) 및 원문 사실·부정 표현 100% 보존 (창작 절대 금지)
+    2순위: 사용자 추가 요청 및 요청 문체({req.tone}) 준수
+    3순위: 목표 분량({length_guide}) 준수
+
+    [절대 규칙]
+    1. 사용자 수정본(current_draft)의 사실관계·의도·부정 표현 완벽 보존 (최우선):
     - 사용자가 직접 수정하거나 추가한 문장, 행동, 생각(예: '서두르고 싶지 않았다', '다음 근무에도 이 메모를 가져가기로 했다', '부끄러웠다기보다 끝까지 읽었다는 안도감이 들었다')을 절대 누락하거나 다른 감정으로 바꾸지 마세요.
     - 의미가 달라질 수 있는 부정 표현이나 상태 표현을 임의로 변경하지 마세요.
-    - 나쁜 예 1: '짐을 다 풀지는 못했지만(미완료 상태)' -> '짐을 모두 풀지는 않았지만(의도적 미수행)'으로 변경 금지!
-    - 나쁜 예 2: 원래 소재가 '포장 순서를 헷갈렸지만 메모를 보며 마쳤다'인데 -> '포장 순서를 헷갈리지 않고 마쳤다'처럼 사실관계를 반대로 서술 금지!
-    - 나쁜 예 3: '부끄러웠다기보다 끝까지 읽었다는 안도감이 들었다'에 원문에 없는 '두려움이 밀려왔지만'을 추가하거나 감정의 초점을 변경 금지!
-    2. 목표 분량 충족 (공백 포함 **{length_guide}**):
-    - 단순히 현재 초안의 조사나 어미만 살짝 바꿔서 100자 내외로 짧게 끝내지 마세요!
-    - 반드시 공백 포함 **{length_guide}**의 완결된 에세이 분량으로 자연스럽게 확장하여 작성해야 합니다.
-    - 분량을 확장할 때는 새로운 사건·인물·배경·칭찬·교훈을 절대 지어내지 말고, 현재 초안과 처음 고른 소재에 들어 있는 사실, 행동의 구체적 과정, 그 순간의 감각과 명시된 생각의 흐름을 문맥에 맞게 차분히 풀어서 서술하세요. (동일한 문장을 기계적으로 반복하는 것은 피하세요.)
+      · 나쁜 예 1: '짐을 다 풀지는 못했지만(미완료 상태)' -> '짐을 모두 풀지는 않았지만(의도적 미수행)'으로 변경 금지!
+      · 나쁜 예 2: 원래 소재가 '포장 순서를 헷갈렸지만 메모를 보며 마쳤다'인데 -> '포장 순서를 헷갈리지 않고 마쳤다'처럼 사실관계를 반대로 서술 금지!
+      · 나쁜 예 3: '부끄러웠다기보다 끝까지 읽었다는 안도감이 들었다'에 원문에 없는 '두려움이 밀려왔지만'을 추가하거나 감정의 초점을 변경 금지!
+    2. 목표 분량 충족 (목표: 공백 포함 {length_guide}):
+    - 현재 초안과 처음 고른 소재에 이미 들어 있는 사실, 행동의 과정, 명시된 생각의 흐름을 차분히 풀어내어 목표 분량({length_guide})에 맞추려 노력하세요. (동일한 문장의 기계적 반복 금지)
+    - 단, **분량을 채우기 위해 현재 초안과 소재에 없는 새로운 사건·인물·배경·감각·칭찬·교훈을 추가하는 것은 무조건 실패**입니다.
+    - 제공된 초안과 소재의 양이 적어 목표 분량에 못 미치더라도 절대 창작하지 말고, `preserved_facts` 범위 안에서만 자연스럽게 완결하세요.
     3. 문체 조건 ({req.tone}):
     - {style_guide}
-    4. 반드시 아래 JSON 형식으로만 응답하세요.
+    4. 사용자 추가 요청 반영:
+    - '사용자 추가 요청'이 '없음'이 아닌 경우, 원문과 사용자 수정본의 사실관계를 왜곡하거나 새 사실을 창작하지 않는 선에서 해당 요청(수정 방향, 강조·삭제 요청, 어조 조정 등)을 충실히 반영하세요.
+    5. 반드시 아래 JSON 형식으로만 응답하세요.
+    - 먼저 `preserved_facts`에 반드시 지켜야 할 사용자 수정본·소재의 사실을 나열한 뒤, `retouched_content`는 오직 `preserved_facts`의 범위 안에서만 작성하세요.
     {{
-        "retouched_content": "수정된 에세이 본문 (공백 포함 {length_guide})"
+        "preserved_facts": ["반드시 보존할 사용자 수정본 및 소재의 사실1", "사실2"],
+        "retouched_content": "preserved_facts 범위 안에서만 수정한 에세이 본문"
     }}
     """
 
@@ -278,25 +318,26 @@ def retouch_draft(req: RetouchRequest):
 
 - 적용할 문체: {req.tone}
 - 목표 길이: 공백 포함 {length_guide} ({req.length})
+- 사용자 추가 요청: {user_request_text}
     """
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        response_format={"type": "json_object"},
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    result = call_llm_json(
+        essay_client,
+        ESSAY_MODEL,
+        messages,
+        temperature=0.3,
+        max_completion_tokens=2000,
     )
-
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
+    # CoT용 중간 필드 제거 (기존 응답 스키마 유지)
+    result.pop("preserved_facts", None)
     return result
 
 # ==========================================
-# 5. 글쓰기 제안 API (N130)
+# 5. 글쓰기 제안 API (N130) -> LOGIC_MODEL
 # ==========================================
 class ProposalRequest(BaseModel):
     materials: list
@@ -329,17 +370,8 @@ def recommend_proposal(req: ProposalRequest):
     """
     user_prompt = f"- 선택된 소재 목록:\n{req.materials}"
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        response_format={"type": "json_object"},
-    )
-
-    # [백엔드 R32 대응] 토큰 사용량 추가
-    result = json.loads(response.choices[0].message.content)
-    result["input_tokens"] = response.usage.prompt_tokens
-    result["output_tokens"] = response.usage.completion_tokens
-    return result
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    return call_llm_json(logic_client, LOGIC_MODEL, messages, max_completion_tokens=1024)
