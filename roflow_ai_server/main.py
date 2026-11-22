@@ -39,6 +39,39 @@ app.add_middleware(
 )
 
 
+def _unwrap_target_key(data: object, target_key: str) -> dict | None:
+    """중첩 dict 내에 target_key가 있으면 해당 dict를 복사해 반환"""
+    if isinstance(data, dict):
+        if target_key in data:
+            return dict(data)
+        for v in data.values():
+            found = _unwrap_target_key(v, target_key)
+            if isinstance(found, dict):
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _unwrap_target_key(item, target_key)
+            if isinstance(found, dict):
+                return found
+    return None
+
+
+def _promote_nested_field(result: dict, target_key: str, drop_key: str | None = None) -> dict:
+    """중첩된 target_key가 포함된 객체를 최상위로 끌어올리고 불필요한 보조 키 제거"""
+    unwrapped = _unwrap_target_key(result, target_key)
+    if isinstance(unwrapped, dict):
+        for k, v in result.items():
+            if k not in unwrapped:
+                unwrapped[k] = v
+        merged = unwrapped
+    else:
+        merged = dict(result)
+
+    if drop_key:
+        merged.pop(drop_key, None)
+    return merged
+
+
 def call_llm_json(
     client: OpenAI,
     model: str | None,
@@ -288,8 +321,7 @@ def generate_draft(req: DraftRequest):
         max_completion_tokens=2000,
         endpoint="/api/essay/draft",
     )
-    result.pop("allowed_facts", None)
-    return result
+    return _promote_nested_field(result, target_key="essay_content", drop_key="allowed_facts")
 
 
 # ==========================================
@@ -367,8 +399,7 @@ def retouch_draft(req: RetouchRequest):
         max_completion_tokens=2000,
         endpoint="/api/essay/retouch",
     )
-    result.pop("preserved_facts", None)
-    return result
+    return _promote_nested_field(result, target_key="retouched_content", drop_key="preserved_facts")
 
 
 # ==========================================
