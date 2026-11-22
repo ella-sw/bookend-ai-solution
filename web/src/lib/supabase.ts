@@ -3,7 +3,7 @@ import { USE_MOCK } from "./api/config";
 
 /**
  * 브라우저용 Supabase 클라이언트 (하나만 만든다).
- * 목록 19번 ①: 프론트는 Supabase를 익명 로그인(signInAnonymously)·세션 관리에만 쓴다.
+ * 목록 19번 ①: 프론트는 Supabase를 익명 로그인(signInAnonymously)·시연 계정 로그인(signInWithPassword)·세션 관리에만 쓴다.
  * 데이터는 모두 백엔드 API(FastAPI)로 주고받는다 → 여기서 .from()으로 DB를 직접 읽지 않는다.
  *
  * env (web/.env.local, 이름은 web/.env.example):

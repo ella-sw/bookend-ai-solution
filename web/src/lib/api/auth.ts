@@ -1,9 +1,9 @@
-import { isAuthRefreshDiscardedError, isAuthRetryableFetchError, type SupabaseClient } from "@supabase/supabase-js";
+import { isAuthApiError, isAuthRefreshDiscardedError, isAuthRetryableFetchError, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabase } from "../supabase";
 import { USE_MOCK } from "./config";
 
 /**
- * 세션(익명 로그인 토큰) 다루기 — 목록 19번 (합의). client.ts·users.ts만 쓴다.
+ * 세션(익명 로그인·시연 계정 로그인 토큰) 다루기 — 목록 19번 (합의). client.ts·users.ts·O110만 쓴다.
  *
  * 실패 이유
  * - network: 연결 문제. 세션은 남아 있다 → '연결이 불안정해요' + [다시 시도]
@@ -138,5 +138,61 @@ async function signInAnonymously(): Promise<TokenResult> {
     return { ok: true, token: data.session.access_token };
   } catch {
     return NETWORK;
+  }
+}
+
+/** 시연 계정 아이디에 "@"가 없으면 붙이는 도메인 (rec → rec@rowflow.app) */
+const DEMO_EMAIL_DOMAIN = "@rowflow.app";
+
+export const demoEmailOf = (id: string) => {
+  const trimmed = id.trim();
+  return trimmed.includes("@") ? trimmed : `${trimmed}${DEMO_EMAIL_DOMAIN}`;
+};
+
+/**
+ * O110 시연 계정 로그인 (아이디·비밀번호). 회원가입은 없다.
+ * 이미 익명 세션이 있어도 그대로 로그인한다 (Supabase가 세션을 바꿈).
+ * 실패: 잘못된 아이디·비번(400 invalid credentials) → unauthorized / 연결 → network / 그 밖 → server
+ */
+export async function signInWithPassword(id: string, password: string): Promise<TokenResult> {
+  if (!id.trim() || !password) return UNAUTHORIZED;
+  if (USE_MOCK) {
+    const { signInMockWithPassword } = await import("./mock/session");
+    const session = signInMockWithPassword(id.trim(), password);
+    return session ? { ok: true, token: session.access_token } : UNAUTHORIZED;
+  }
+  try {
+    const sb = supabaseOrNull();
+    if (!sb.ok || !sb.client) return SERVER;
+    const { data, error } = await sb.client.auth.signInWithPassword({ email: demoEmailOf(id), password });
+    if (error) {
+      if (isAuthRetryableFetchError(error)) return NETWORK;
+      if (isAuthApiError(error) && (error.code === "invalid_credentials" || error.status === 400)) return UNAUTHORIZED;
+      return SERVER;
+    }
+    if (!data.session) return SERVER;
+    return { ok: true, token: data.session.access_token };
+  } catch {
+    return NETWORK;
+  }
+}
+
+/**
+ * 지금 세션이 익명 사용자인가 (O110 기록 보관 안내 문구). 서버를 부르지 않는다.
+ * 세션이 없거나 읽지 못하면 true (익명으로 시작할 사람에게 맞는 안내).
+ */
+export async function isAnonymousSession(): Promise<boolean> {
+  if (USE_MOCK) {
+    const { getMockSession } = await import("./mock/session");
+    return !getMockSession()?.user_id.startsWith("mock-demo-");
+  }
+  try {
+    const sb = supabaseOrNull();
+    if (!sb.ok || !sb.client) return true;
+    const { data, error } = await sb.client.auth.getSession();
+    if (error || !data.session) return true;
+    return data.session.user.is_anonymous !== false;
+  } catch {
+    return true;
   }
 }
