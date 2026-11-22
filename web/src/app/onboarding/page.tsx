@@ -1,17 +1,18 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   BottomActionBar,
   BottomActionBarSpacer,
   Button,
+  Loading,
   RetryNotice,
   ScreenHeader,
 } from "@/components/ui";
 import { AiUsageSheet } from "@/components/common/AiUsageSheet";
-import { getMe, signInWithPassword, startWithConsent } from "@/lib/api";
+import { getMe, hasSession, isAnonymousSession, signInWithPassword, startWithConsent } from "@/lib/api";
 import { routes } from "@/lib/routes";
 
 /**
@@ -21,7 +22,11 @@ import { routes } from "@/lib/routes";
  *    - 성공 → getMe(): ok → 홈 / not_consented → 2(동의, 로그인한 계정 세션으로) / 그 밖 → 오류 문구
  *    - 오류 문구(입력칸 아래): 아이디·비번 틀림 / 연결 / 서버. 입력을 바꾸면 지움. 비밀번호는 실패해도 그대로
  *    - [로그인 없이 시작하기] → 2 (익명 시작). 회원가입·로그아웃은 없음
- * 2. 시작하기 전에: AI 사용 안내([자세히 보기] → AI 사용 안내 시트) · 기록 보관 안내 · 동의 체크 → [동의하고 시작하기]
+ * 0. 열 때 hasSession(): 세션이 있으면(동의 전) 2부터, 없으면 1부터. 확인하는 동안 Loading
+ *    (세션이 있으면 [로그인 없이 시작하기]는 보이지 않는다. 2의 [뒤로]로 1에 간 경우만 남음 — 로그아웃 없음)
+ * 2. 시작하기 전에: 기능 소개(소재 모으기 · 새 글 쓰기) · AI 사용 안내([자세히 보기] → AI 사용 안내 시트) · 기록 보관 안내 · 동의 체크 → [동의하고 시작하기]
+ *    - 기록 보관 안내: '마지막으로 들어온 뒤 1달이 지나면 기록을 자동으로 지워요.'
+ *      익명일 때만(isAnonymousSession) 앞에 '이 브라우저로 내 기록을 찾아요. 브라우저 데이터를 지우면 다시 들어올 수 없어요.'
  *    - 시트를 닫아도 동의 체크는 그대로
  *    - 동의 체크해야 눌림. 요청 중에는 버튼을 막는다 (두 번 눌러도 요청 1번)
  *    - 성공 → 홈. 실패 → '연결이 불안정해요' + [다시 시도], 이 화면에 머묾
@@ -35,7 +40,20 @@ export default function OnboardingPage() {
 }
 
 function Onboarding() {
-  const [step, setStep] = useState<"intro" | "consent">("intro");
+  // 세션이 있으면(익명이든 시연 계정이든, 동의 전) 로그인 화면을 건너뛰고 동의 단계부터
+  const [step, setStep] = useState<"checking" | "intro" | "consent">("checking");
+
+  useEffect(() => {
+    let cancelled = false;
+    void hasSession().then((has) => {
+      if (!cancelled) setStep((current) => (current === "checking" ? (has ? "consent" : "intro") : current));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (step === "checking") return <Loading fullScreen />;
 
   return step === "intro" ? (
     <Intro onNext={() => setStep("consent")} onNeedConsent={() => setStep("consent")} />
@@ -200,6 +218,18 @@ function Consent({ onBack }: { onBack: () => void }) {
   const [failed, setFailed] = useState(false);
   // 다시 그려지기 전의 빠른 두 번째 클릭도 막는다
   const inFlight = useRef(false);
+  /** 기록 보관 안내: 익명일 때만 '이 브라우저로…' 문장을 붙인다. 열릴 때 한 번 읽음 (읽기 전엔 익명으로 봄) */
+  const [anonymous, setAnonymous] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void isAnonymousSession().then((value) => {
+      if (!cancelled) setAnonymous(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = async () => {
     if (inFlight.current || !agreed) return;
@@ -220,6 +250,11 @@ function Consent({ onBack }: { onBack: () => void }) {
       <ScreenHeader title="시작하기 전에" back onBack={onBack} />
 
       <div className="flex flex-col gap-4 px-5 pt-5">
+        <ol className="flex flex-col gap-3">
+          <IntroStep no={1} title="소재 모으기" description="떠오른 경험을 적거나 AI 질문에 답해요" />
+          <IntroStep no={2} title="새 글 쓰기" description="모인 소재를 골라 글로 엮어요" />
+        </ol>
+
         <Notice title="AI 사용 안내">
           <p>AI가 기록을 분석하고 글을 다듬기 위해 외부 AI 회사로 기록이 전달돼요.</p>
           <button
@@ -233,8 +268,8 @@ function Consent({ onBack }: { onBack: () => void }) {
 
         <Notice title="기록 보관 안내">
           <p>
-            이 브라우저로 내 기록을 찾아요. 브라우저 데이터를 지우면 다시 들어올 수 없고, 1달 동안 접속하지 않으면 기록이
-            정리돼요.
+            {anonymous && "이 브라우저로 내 기록을 찾아요. 브라우저 데이터를 지우면 다시 들어올 수 없어요. "}
+            마지막으로 들어온 뒤 1달이 지나면 기록을 자동으로 지워요.
           </p>
         </Notice>
 
@@ -265,6 +300,20 @@ function Consent({ onBack }: { onBack: () => void }) {
 
       <AiUsageSheet open={aiUsageOpen} onClose={() => setAiUsageOpen(false)} />
     </>
+  );
+}
+
+function IntroStep({ no, title, description }: { no: number; title: string; description: string }) {
+  return (
+    <li className="flex items-start gap-4 rounded-2xl bg-subtle p-4">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
+        {no}
+      </span>
+      <span>
+        <span className="block text-base font-bold">{title}</span>
+        <span className="text-sm text-ink-soft">{description}</span>
+      </span>
+    </li>
   );
 }
 

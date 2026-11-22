@@ -8,7 +8,7 @@
  * 주소(path)·응답 모양은 목록 16번(서버 구조) 합의 전 A의 임시안 — 합의되면 각 함수의 path와 types.ts만 맞춘다.
  */
 export * from "./client";
-export { signInWithPassword, type AuthFailure, type TokenResult } from "./auth";
+export { isAnonymousSession, signInWithPassword, type AuthFailure, type TokenResult } from "./auth";
 export * from "./config";
 export * from "./types";
 export * from "./users";

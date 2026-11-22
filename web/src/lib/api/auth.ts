@@ -176,3 +176,23 @@ export async function signInWithPassword(id: string, password: string): Promise<
     return NETWORK;
   }
 }
+
+/**
+ * 지금 세션이 익명 사용자인가 (O110 기록 보관 안내 문구). 서버를 부르지 않는다.
+ * 세션이 없거나 읽지 못하면 true (익명으로 시작할 사람에게 맞는 안내).
+ */
+export async function isAnonymousSession(): Promise<boolean> {
+  if (USE_MOCK) {
+    const { getMockSession } = await import("./mock/session");
+    return !getMockSession()?.user_id.startsWith("mock-demo-");
+  }
+  try {
+    const sb = supabaseOrNull();
+    if (!sb.ok || !sb.client) return true;
+    const { data, error } = await sb.client.auth.getSession();
+    if (error || !data.session) return true;
+    return data.session.user.is_anonymous !== false;
+  } catch {
+    return true;
+  }
+}
