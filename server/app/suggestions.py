@@ -6,6 +6,9 @@ When:  a material is confirmed, edited (both old and new topics), re-analysed wi
 Rule:  a topic gets a suggestion when confirmed, not deleted materials from at least
        `suggest_min_records` different records are in it (one material per record, so
        materials = records). Fewer → the suggestion is removed.
+       Materials already used in a saved essay (AI or direct) are left out, so the card
+       doesn't keep offering what the user just wrote. Saving or deleting an essay
+       recomputes its materials' topics; drafts (임시 저장) don't count.
 Same:  basis_hash = every such material's (id, updated_at) (ERD rule 9). Same hash and
        already ready/none → the AI is not called again. failed → retried on the next change.
 Late:  the result is applied only if the request is still running and the suggestion's
@@ -43,10 +46,24 @@ async def _topic_materials(conn: AsyncConnection, topic_id: int) -> list[dict]:
           from materials m join material_topics mt on mt.material_id = m.id
          where m.user_id = auth.uid() and mt.topic_id = %s
            and m.confirmed_at is not null and m.deleted_at is null
+           and not exists (
+             select 1 from essay_materials em join essays e on e.id = em.essay_id
+              where em.material_id = m.id and e.status = 'saved')
          order by m.updated_at desc
         """,
         (topic_id,),
     )).fetchall()
+
+
+async def topics_of(conn: AsyncConnection, material_ids: list) -> set[int]:
+    """Topics of these materials: what to recompute when an essay using them is saved
+    or deleted."""
+    if not material_ids:
+        return set()
+    rows = await (await conn.execute(
+        "select distinct topic_id from material_topics where material_id = any(%s)",
+        (list(material_ids),))).fetchall()
+    return {r["topic_id"] for r in rows}
 
 
 async def expire_stale(conn: AsyncConnection) -> None:

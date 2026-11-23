@@ -75,7 +75,9 @@ async def user_conn(
         yield conn
 
 
-UserConn = Annotated[AsyncConnection, Depends(user_conn)]
+# scope="function": commit before the response is sent, so background tasks (R30 제안
+# 다시 계산) see this request's changes.
+UserConn = Annotated[AsyncConnection, Depends(user_conn, scope="function")]
 
 
 async def require_consent(conn: AsyncConnection) -> None:
