@@ -101,3 +101,24 @@ def test_me_shows_usage_and_clearing_data_does_not_reset_it(client, make_user, l
 
     save(client, a)
     assert client.get("/me", headers=auth(a)).json()["daily_limit_reached"]
+
+
+# ---------------------------------------------------------------------------
+# 시연 계정 (rec, guest): 따로 높은 한도
+# ---------------------------------------------------------------------------
+def test_demo_accounts_get_their_own_limit(client, make_user, owner, limit, monkeypatch):
+    limit(1)
+    demo, normal = make_user(), make_user()
+    monkeypatch.setattr(get_settings(), "demo_user_ids", f" {str(demo).upper()} , other-id")
+    monkeypatch.setattr(get_settings(), "ai_daily_limit_demo", 3)
+
+    me = client.get("/me", headers=auth(demo)).json()
+    assert me["ai_daily_limit"] == 3
+    assert client.get("/me", headers=auth(normal)).json()["ai_daily_limit"] == 1
+
+    st = reply(client, demo, start(client, demo))  # 2 calls, over the normal limit of 1
+    assert not st["daily_limit_reached"] and st["pending_question"] is not None
+    assert calls(owner, demo) == 2
+
+    st = reply(client, normal, start(client, normal))  # the normal user stops at 1
+    assert st["daily_limit_reached"]

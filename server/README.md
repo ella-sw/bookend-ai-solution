@@ -113,6 +113,8 @@ Environment Variables (값은 대시보드에만 넣고 커밋하지 않는다):
 | `CORS_ORIGINS` | `http://localhost:3000,https://bookend-ai-solution.vercel.app` |
 | `AI_PROVIDER` | `stub` (C의 AI가 들어오면 `openai` + `OPENAI_API_KEY`) |
 | `AI_DAILY_LIMIT` | 하루 AI 호출 한도 (없으면 50, 팀 협의 후 확정) |
+| `DEMO_USER_IDS` | 시연 계정(rec, guest)의 Supabase User UID, 쉼표로 구분. 비우면 시연 계정 없음 |
+| `AI_DAILY_LIMIT_DEMO` | 시연 계정의 하루 AI 호출 한도 (없으면 500). 심사위원이 한 계정을 같이 쓰기 때문 |
 
 - 무료 요금제는 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
 - 배포 확인: `https://<서비스 주소>/health` → `{"status":"ok"}`, `/docs`
