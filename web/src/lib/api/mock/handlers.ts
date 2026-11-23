@@ -1259,7 +1259,12 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
   // 글쓰기 제안 (B suggestions.py)
   "suggestions.list": ({ scenario }): SuggestionList => {
     if (scenario === "empty") return { computing: false, suggestions: [] };
-    return { computing: scenario === "computing", suggestions: getDb().suggestions.map(suggestionOf) };
+    // B는 남은 소재로 다시 계산한다. 목업은 AI가 없어 쓴 소재가 든 제안을 숨기기만 한다 (B 763fc1a).
+    // 저장한 글(saved)만 기준. 임시 저장(draft)은 넣지 않고, 글을 지우면 db에서 없어져 제안이 다시 보인다
+    const db = getDb();
+    const used = new Set(db.essays.filter((e) => e.status === "saved").flatMap((e) => e.material_ids));
+    const suggestions = db.suggestions.filter((sg) => !sg.material_ids.some((id) => used.has(id)));
+    return { computing: scenario === "computing", suggestions: suggestions.map(suggestionOf) };
   },
 
   "suggestion.get": ({ params }): Suggestion => {

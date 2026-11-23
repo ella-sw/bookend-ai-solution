@@ -564,7 +564,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
                 className="flex flex-col items-center rounded-xl border border-line px-4 py-3 text-center active:bg-subtle"
               >
                 <span className="text-[15px] font-semibold">다른 앱으로 공유</span>
-                <span className="text-xs text-ink-mute">카카오톡 · 인스타그램 · 브런치 등</span>
+                <span className="text-xs text-ink-mute">휴대폰 공유창에서 앱을 골라요</span>
               </button>
             )}
           </div>
