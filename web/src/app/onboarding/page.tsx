@@ -71,7 +71,7 @@ const LOGIN_ERROR: Record<"unauthorized" | "network" | "server", string> = {
 };
 
 const inputClass =
-  "h-12 w-full rounded-xl border border-[#4b6031]/25 bg-[#fffdf5] px-4 text-base text-ink placeholder:text-ink-mute focus:border-[#4b6031] focus:outline-none";
+  "h-12 w-full rounded-none border-0 border-b border-[#4b6031]/35 bg-transparent px-0.5 text-base text-ink placeholder:text-ink-mute focus:border-[#4b6031] focus:shadow-[0_1px_0_0_#4b6031] focus:outline-none";
 
 function Intro({ onNext, onNeedConsent }: { onNext: () => void; onNeedConsent: () => void }) {
   const router = useRouter();
@@ -142,8 +142,7 @@ function Intro({ onNext, onNeedConsent }: { onNext: () => void; onNeedConsent: (
       </div>
 
       <div className="px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <form onSubmit={login} noValidate className="flex flex-col gap-3 rounded-2xl bg-[#fffdf5]/85 p-4 backdrop-blur-sm">
-          <h2 className="text-[15px] font-bold text-[#4b6031]">시연 계정</h2>
+        <form onSubmit={login} noValidate className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <label htmlFor={idFieldId} className="text-sm font-semibold text-ink-soft">
               아이디
@@ -163,7 +162,7 @@ function Intro({ onNext, onNeedConsent }: { onNext: () => void; onNeedConsent: (
               className={inputClass}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
+          <div className="mt-3 flex flex-col gap-1.5">
             <label htmlFor={passwordFieldId} className="text-sm font-semibold text-ink-soft">
               비밀번호
             </label>
@@ -197,7 +196,7 @@ function Intro({ onNext, onNeedConsent }: { onNext: () => void; onNeedConsent: (
           type="button"
           onClick={onNext}
           disabled={submitting}
-          className="mt-2 flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-semibold text-[#4b6031] active:bg-[#4b6031]/10 disabled:opacity-40"
+          className="mt-2 flex h-11 w-full items-center justify-center rounded-xl text-[15px] font-medium text-[#4b6031]/55 active:bg-[#4b6031]/10 disabled:opacity-40"
         >
           로그인 없이 시작하기
         </button>
