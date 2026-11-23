@@ -19,6 +19,8 @@ Rules (ERD 1, 7, 12, 13, 16):
 - essays.title is a copy of the latest version's title.
 - Deleted or unconfirmed materials can't be used for a new essay.
 - essay_saved (R33) is recorded for first save, new version and overwrite.
+- R30: saving or deleting an essay recomputes the suggestions of its materials' topics
+  (materials used in a saved essay are not suggested again).
 - One version can be deleted, except 초안 (version 0) and the last remaining version.
   Numbers are not renumbered; a new version is still max(version_no) + 1.
 """
@@ -27,14 +29,19 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from psycopg import AsyncConnection
 from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, Field, StringConstraints
 
+from app.ai import SuggestAI, get_suggest_ai
+from app.auth import CurrentUser, current_user
 from app.db import ConsentedConn
+from app.suggestions import recompute_topics, topics_of
 
 router = APIRouter(prefix="/essays", tags=["essays"])
+User = Annotated[CurrentUser, Depends(current_user)]
+SuggestAIDep = Annotated[SuggestAI, Depends(get_suggest_ai)]
 
 MAX_BODY = 20_000
 Title = Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)]
@@ -243,6 +250,13 @@ async def _after_save(conn: AsyncConnection, essay_id: UUID, method: str) -> Non
     )
 
 
+def after_essay_change(background: BackgroundTasks, user_id: UUID, topics: set[int],
+                       ai: SuggestAI) -> None:
+    """R30: after this request commits, recompute the suggestions of these topics."""
+    if topics:
+        background.add_task(recompute_topics, user_id, topics, ai)
+
+
 async def _version_by_token(conn: AsyncConnection, token: UUID) -> dict | None:
     """The caller's version already saved with this token (retry)."""
     return await (await conn.execute(
@@ -308,7 +322,8 @@ async def save_draft(data: DraftIn, conn: ConsentedConn) -> Draft:
 
 @router.post("", response_model=Essay, status_code=status.HTTP_201_CREATED,
              responses={200: {"description": "Already saved (retry): the essay"}})
-async def first_save(data: FirstSaveIn, conn: ConsentedConn, response: Response) -> Essay:
+async def first_save(data: FirstSaveIn, conn: ConsentedConn, response: Response, user: User,
+                     background: BackgroundTasks, suggest_ai: SuggestAIDep) -> Essay:
     """N140 [저장]: 처음 저장하면 v1 (직접 쓴 글에는 초안이 없다). Then open L120.
 
     Continuing a draft: send its id as `essay_id`; the draft becomes this essay.
@@ -351,6 +366,7 @@ async def first_save(data: FirstSaveIn, conn: ConsentedConn, response: Response)
         (essay_id, data.title or None, data.body, len(data.body), data.save_token),
     )
     await _after_save(conn, essay_id, "direct")
+    after_essay_change(background, user.id, await topics_of(conn, ids), suggest_ai)
     return await _essay(conn, essay_id)
 
 
@@ -468,8 +484,15 @@ async def delete_version(essay_id: UUID, version_id: UUID, conn: ConsentedConn) 
 # L121 글 삭제
 # ---------------------------------------------------------------------------
 @router.delete("/{essay_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_essay(essay_id: UUID, conn: ConsentedConn) -> Response:
-    """글·모든 버전·소재 연결을 지운다. 소재는 소재함에 남는다. Works for the draft too."""
+async def delete_essay(essay_id: UUID, conn: ConsentedConn, user: User,
+                       background: BackgroundTasks, suggest_ai: SuggestAIDep) -> Response:
+    """글·모든 버전·소재 연결을 지운다. 소재는 소재함에 남는다. Works for the draft too.
+    R30: its materials become suggestion candidates again."""
+    used = await (await conn.execute(
+        "select em.material_id from essay_materials em join essays e on e.id = em.essay_id "
+        "where e.id = %s and e.user_id = auth.uid() and e.status = 'saved'",
+        (essay_id,))).fetchall()
+    topics = await topics_of(conn, [r["material_id"] for r in used])
     row = await (await conn.execute(
         "delete from essays where id = %s and user_id = auth.uid() returning id", (essay_id,),
     )).fetchone()
@@ -477,4 +500,5 @@ async def delete_essay(essay_id: UUID, conn: ConsentedConn) -> Response:
         raise _not_found("essay_not_found")
     await conn.execute(
         "delete from ai_requests where target_type = 'essay' and target_id = %s", (essay_id,))
+    after_essay_change(background, user.id, topics, suggest_ai)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

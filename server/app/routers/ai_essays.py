@@ -28,12 +28,21 @@ from dataclasses import asdict, replace
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, StringConstraints
 
-from app.ai import AIError, AIEssay, DraftInput, EssayAI, MaterialInput, get_essay_ai
+from app.ai import (
+    AIError,
+    AIEssay,
+    DraftInput,
+    EssayAI,
+    MaterialInput,
+    SuggestAI,
+    get_essay_ai,
+    get_suggest_ai,
+)
 from app.auth import CurrentUser, current_user
 from app.config import get_settings
 from app.db import require_consent, user_tx
@@ -45,14 +54,17 @@ from app.routers.essays import (
     _insert_version,
     _lock_usable_materials,
     _version_by_token,
+    after_essay_change,
     in_length_range,
 )
+from app.suggestions import topics_of
 from app.usage import take_ai_call
 
 router = APIRouter(prefix="/essays", tags=["ai essays"])
 
 User = Annotated[CurrentUser, Depends(current_user)]
 AI = Annotated[EssayAI, Depends(get_essay_ai)]
+SuggestAIDep = Annotated[SuggestAI, Depends(get_suggest_ai)]
 
 ORIGINAL_LIMIT = 1_500  # 원본은 소재당 1,500자까지 (ERD rule 11)
 RETRY_MIN_SECONDS = 5  # don't start the length retry with less time than this left
@@ -213,7 +225,8 @@ async def _close_ok(conn: AsyncConnection, request_id: int, tokens_in: int, toke
                         422: {"description": "material_not_available"},
                         429: {"description": "daily_limit"},
                         502: {"description": "ai_failed → [다시 시도]"}})
-async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response) -> Essay:
+async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response,
+                      background: BackgroundTasks, suggest_ai: SuggestAIDep) -> Essay:
     """[에세이 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다.
     Same `save_token` again → 200 with the essay already made (no second AI call)."""
     ids = list(dict.fromkeys(data.material_ids))
@@ -258,6 +271,9 @@ async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response
         else:
             essay = await _save_first_draft(conn, essay_id, ids, data, out, used, materials,
                                             req["id"])
+            topics = await topics_of(conn, ids)
+    if essay is not None:
+        after_essay_change(background, user.id, topics, suggest_ai)  # R30
     if gone:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                             detail="material_not_available")
