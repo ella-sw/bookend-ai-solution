@@ -1,0 +1,130 @@
+# Rowflow 백엔드 (FastAPI + Supabase)
+
+기준 문서: 요구사항 정의서·UI 설계서·ERD **소재추가 v7** + `B·C 공유: DB 규칙 3건` (11/16)
+
+## 구조
+
+```
+Next.js 화면 ── Supabase 익명 로그인 ── 토큰을 Authorization 헤더로 ──▶ 이 서버(FastAPI) ──▶ Supabase Postgres
+```
+
+- 브라우저는 **로그인만** Supabase로 하고, 데이터는 모두 이 API로 주고받습니다.
+  브라우저 역할(`anon`, `authenticated`)은 사용자 테이블에 직접 접근할 수 없습니다.
+- 서버는 요청마다 한 트랜잭션 안에서 `app_user` 역할 + 호출한 사용자 id로 쿼리합니다.
+  그래서 **RLS가 서버 쿼리에도 적용**됩니다 (`app/db.py`). SQL에도 사용자 조건은 직접 넣습니다.
+
+```
+app/
+  main.py          앱, CORS, /health
+  config.py        환경 변수
+  auth.py          Supabase 토큰 확인 (JWKS 또는 예전 HS256 비밀 키)
+  db.py            연결 풀, 사용자 단위 트랜잭션(UserConn)
+  routers/me.py    GET /me, POST /me/consent
+supabase/migrations/
+  ..._tables.sql     테이블·제약·인덱스
+  ..._rules.sql      트리거(데이터 규칙), 정리 함수, RLS·권한
+  ..._schedules.sql  pg_cron 예약 작업 (시간 초과 정리, 1달 정리)
+tests/
+  test_db_rules.py   다른 사람 기록 접근 차단, DB 규칙
+  test_api.py        토큰 확인, /me
+```
+
+## ERD v7에서 달라진 점 (B·C 공유 문서 반영)
+
+| 항목 | 반영 |
+|---|---|
+| 1. 소재 수정 시각 | `materials.updated_at` 추가. 소재가 바뀌거나 `material_topics`가 추가·삭제되면 트리거가 갱신 |
+| 2. AI 요청 대상 | `ai_requests.target_type` = `record` / `suggestion` / `essay` (제안 요청은 `suggestions.id`) |
+| 3. 시간 초과 뒤 결과 | `expire_ai_requests()`가 60초 지난 `running` 요청을 `timeout`으로 바꾸고, 분석 중이던 기록은 `failed`, 계산 중이던 제안은 `failed`로. 결과는 `status = running`이고 최신 요청일 때만 적용 (API에서 구현 예정) |
+| 4. 이벤트 칸 이름 | `events.share_method` (`copy` / `share_sheet`) |
+| 상태 값 타입 | `text + CHECK` (ERD 규칙 18의 권장안) |
+
+## DB가 직접 지키는 규칙
+
+- 저장된 원본 기록·문답은 고칠 수 없음 (ERD 규칙 2)
+- 임시 저장은 기록 종류별 1개, 직접 쓰기 글 1개 (규칙 16)
+- 다른 사람의 기록에 문답·소재·연결을 붙일 수 없음 (규칙 17)
+- 모든 기록 지우기 `clear_user_data()`: 사용자 행과 동의 시각은 남김 (규칙 14)
+- 1달 정리 `cleanup_inactive_users()` (규칙 15)
+
+## 처음 설정
+
+```bash
+uv sync                 # Python 3.12 + 패키지 설치
+cp .env.example .env    # 값 채우기
+uv run uvicorn app.main:app --reload
+```
+
+API 문서: http://localhost:8000/docs (A와 이 화면을 공유하면 됩니다)
+
+### Supabase에 테이블 만들기
+
+1. Supabase 대시보드에서 **익명 로그인**을 켭니다 (Authentication > Sign In / Providers > Anonymous).
+2. **pg_cron**을 켭니다 (Database > Extensions).
+3. 마이그레이션을 올립니다. 둘 중 하나:
+   - Supabase CLI: `supabase link --project-ref <ref>` 후 `supabase db push`
+   - 또는 SQL Editor에 `supabase/migrations/*.sql`을 순서대로 붙여 넣기
+4. `.env`의 `DATABASE_URL`은 **Session pooler(5432)** 주소를 씁니다.
+
+`tests/sql/supabase_shim.sql`은 테스트 전용입니다. Supabase에는 올리지 마세요.
+
+## 테스트
+
+```bash
+./scripts/test-db.sh    # Docker로 테스트용 Postgres 시작 (포트 54329)
+uv run pytest
+uv run ruff check .
+```
+
+## 다음 할 일
+
+- [x] 기록 API: 자유 기록 임시 저장·[소재로 저장] (R04)
+- [x] AI 질문 API: 오늘의 질문, 후속 질문, 다른 질문 보기 (R05) — AI는 stub, C가 `app/ai.py`에 실제 모델 연결
+- [x] 소재 분석 API: 저장하면 자동 분석, 결과 확인, [다시 분석], [원본만 보관] (R28, B·C 규칙 3) — AI는 stub, C가 `MaterialAI` 연결
+- [x] 소재함 API: 보관 확정·직접 정리하기, 소재함 목록, 상세, 고치기, 다시 분석 비교, 소재·기록 삭제 (R27)
+- [x] 모든 기록 지우기 (R31), 화면 이벤트 기록 POST /events (R33)
+- [x] 직접 쓰기·버전 저장·내 서재 (R07 직접 쓰기, R08, R10)
+- [x] 관련 소재 추천 GET /materials/related (R29, AI 없이 주제·키워드)
+- [x] 하루 AI 호출 한도 (R32) — 값은 AI_DAILY_LIMIT (임시 50, 팀 협의 후 확정)
+- [x] AI 초안·다시 만들기·저장 서버 흐름 (R07, R08) — AI는 stub, C가 `EssayAI` 연결
+- [x] 글쓰기 제안 (R30) — 기준 3개(SUGGEST_MIN_RECORDS, 임시), AI는 stub, C가 `SuggestAI` 연결
+- [ ] 배포 (Render / Railway / Fly.io)
+
+## 배포 (Render)
+
+Render 대시보드 → New → Web Service → GitHub 저장소 `ella-sw/bookend-ai-solution`
+
+| 설정 | 값 |
+|---|---|
+| Branch | `feat/backend-setup` (main에 합친 뒤에는 `main`) |
+| Root Directory | `server` |
+| Runtime | Python 3 (`.python-version` = 3.12) |
+| Region | Singapore (Supabase 서울과 가장 가까움) |
+| Build Command | `pip install uv && uv sync --frozen --no-dev` |
+| Start Command | `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| Health Check Path | `/health` |
+
+Environment Variables (값은 대시보드에만 넣고 커밋하지 않는다):
+
+| 이름 | 값 |
+|---|---|
+| `DATABASE_URL` | `.env`와 같은 Session pooler 주소 |
+| `SUPABASE_URL` | `https://<project-ref>.supabase.co` |
+| `CORS_ORIGINS` | `http://localhost:3000,https://bookend-ai-solution.vercel.app` |
+| `AI_PROVIDER` | `stub` (C의 AI가 들어오면 `openai` + `OPENAI_API_KEY`) |
+| `AI_DAILY_LIMIT` | 하루 AI 호출 한도 (없으면 50, 팀 협의 후 확정) |
+| `DEMO_USER_IDS` | 시연 계정(rec, guest)의 Supabase User UID, 쉼표로 구분. 비우면 시연 계정 없음 |
+| `AI_DAILY_LIMIT_DEMO` | 시연 계정의 하루 AI 호출 한도 (없으면 500). 심사위원이 한 계정을 같이 쓰기 때문 |
+
+- 무료 요금제는 15분 동안 요청이 없으면 잠들고, 다음 첫 요청이 1분쯤 걸린다.
+- 배포 확인: `https://<서비스 주소>/health` → `{"status":"ok"}`, `/docs`
+- DB 구조 변경은 배포와 별개로 `supabase db push --remote`로 반영한다.
+
+## 실제 서버 전체 흐름 점검
+
+```bash
+uv run python scripts/e2e_check.py                       # 배포된 서버
+uv run python scripts/e2e_check.py http://localhost:8000  # 내 컴퓨터의 서버
+```
+
+테스트용 익명 사용자 1명으로 동의 → 기록·분석·보관 → AI 문답 → 소재함·추천 → 제안 → AI 초안·다시 만들기 → 직접 쓰기 → 지우기까지 45단계를 실행하고, 끝나면 (실패해도) 그 사용자를 지운다. `.env`에 `SUPABASE_PUBLISHABLE_KEY`, `DATABASE_URL`이 필요하다. AI 호출이 약 10회 일어나므로 실제 AI 연결 뒤에는 비용이 든다.
