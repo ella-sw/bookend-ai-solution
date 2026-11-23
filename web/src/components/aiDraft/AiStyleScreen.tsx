@@ -92,6 +92,8 @@ interface RegenMeta {
  *   보던 글의 문체·길이를 미리 골라 둔다 (값이 없으면(직접 쓴 글) 고르지 않음, 28번 미정).
  *   3단계는 읽기 전용: 글의 추천 흐름·요청사항이 있으면 보여 주고, 둘 다 없으면 '요청사항 없이 만든 글이에요'.
  *   아래 '요청사항은 다시 만들 때 바뀌지 않아요.' (다시 만들기 요청에는 direction·request를 보내지 않음)
+ * - 2단계 [장문] 아래: 고른 소재 원문 합계(자유 기록 본문·문답 답, 소재당 1500자까지)가 SHORT_SOURCE_CHARS보다 짧으면
+ *   '고른 소재가 짧아요…' 안내 (목록 36번). 막지 않음. 새 글·다시 만들기 모두. 원문을 못 읽으면 안내 없음
  * - 만드는 동안 화면 전체를 덮고 다른 조작(뒤로가기 포함)을 막는다
  * - 헤더 [뒤로]: 2·3단계에서는 [이전]과 같이 한 단계 앞으로, 문체 단계에서는 이전 화면으로 (목록 11번).
  *   브라우저 뒤로 가기는 그대로 이전 화면
@@ -132,8 +134,10 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
   const [style, setStyle] = useState<Style | null>(null);
   const [length, setLength] = useState<EssayLength | null>(null);
   const [phase, setPhase] = useState<Phase>("choose");
-  /** 새 글 모드에서 고른 소재 원문 글자 수 합계. 모르면(불러오는 중·실패) null */
+  /** 고른 소재 원문 글자 수 합계. 모르면(불러오는 중·실패) null */
   const [sourceChars, setSourceChars] = useState<number | null>(null);
+  /** 다시 만들기: 글에 쓴 소재 id (원문 글자 수를 세는 데만 씀). 모르면 null */
+  const [regenMaterialIds, setRegenMaterialIds] = useState<string[] | null>(null);
   const direct = useDirectStart();
 
   /** 처음 누를 때 하나, [다시 시도]에도 같은 값 */
@@ -169,6 +173,9 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
           }
         } else {
           meta = { direction: res.data.direction, request: res.data.request };
+          // 장문 안내용 원문 글자 수: 소재함에서 지운 소재가 있으면 원문을 읽을 수 없어 세지 않는다 (안내 없음)
+          const mats = res.data.materials;
+          if (!cancelled && mats.length > 0 && mats.every((m) => !m.deleted)) setRegenMaterialIds(mats.map((m) => m.id));
           if (regen.base && "version" in regen.base) {
             const versionId = regen.base.version;
             const v = res.data.versions.find((x) => x.id === versionId);
@@ -210,8 +217,8 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     };
   }, [params, regen, attempt, goOnboardingIfNeeded, router, toast]);
 
-  // 새 글 모드: 고른 소재 원문 글자 수 합계 (짧으면 장문 안내). 하나라도 실패하면 null (안내 없음)
-  const materialIds = regen ? null : info?.materialIds;
+  // 고른 소재 원문 글자 수 합계 (짧으면 장문 안내). 다시 만들기는 글의 소재로 센다. 하나라도 실패하면 null (안내 없음)
+  const materialIds = regen ? regenMaterialIds : info?.materialIds;
   useEffect(() => {
     if (!materialIds || materialIds.length === 0) return;
     let cancelled = false;
@@ -441,7 +448,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
             {LENGTHS.map((l) => (
               <Fragment key={l.value}>
                 <OptionCard title={l.label} description={l.description} selected={length === l.value} onClick={() => setLength(l.value)} />
-                {l.value === "long" && !regenMode && sourceChars !== null && sourceChars < SHORT_SOURCE_CHARS && (
+                {l.value === "long" && sourceChars !== null && sourceChars < SHORT_SOURCE_CHARS && (
                   <p className="px-1 text-sm text-ink-soft">고른 소재가 짧아요. 장문에는 기록에 없는 내용이 더해질 수 있어요</p>
                 )}
               </Fragment>
