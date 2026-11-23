@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLeaveGuard } from "@/components/collect/useLeaveGuard";
 import { BottomActionBar, BottomActionBarSpacer, Button, Loading, RetryNotice, ScreenHeader, Spinner, useToast } from "@/components/ui";
@@ -8,6 +8,7 @@ import {
   ESSAY_RULES,
   createAiDraft,
   getEssay,
+  getMaterial,
   getMaterialBox,
   getSuggestion,
   logEvent,
@@ -15,6 +16,7 @@ import {
   regenerateEssay,
   type ApiError,
   type EssayLength,
+  type Original,
   type RegenerateBase,
   type Style,
 } from "@/lib/api";
@@ -45,6 +47,16 @@ const LENGTHS: { value: EssayLength; label: string; description: string }[] = [
   { value: "short", label: "단문", description: "약 300~500자" },
   { value: "long", label: "장문", description: "약 1,000~1,500자" },
 ];
+/** 고른 소재 원문 합계가 이보다 짧으면 장문 안내 (목록 36번, 임시값 11/23. 실제 AI 시험 뒤 조정) */
+const SHORT_SOURCE_CHARS = 500;
+/** 소재 하나에서 세는 최대 글자 수 (B 서버도 AI에 1500자까지만 보냄) */
+const SOURCE_CHARS_PER_MATERIAL = 1500;
+
+/** 소재 원문 글자 수: 자유 기록은 본문, 문답은 답만 (질문은 세지 않음). 코드 포인트 기준, 소재 하나 최대 1500자 */
+function sourceCharsOf(original: Original): number {
+  const text = original.record_type === "free" ? (original.body ?? "") : original.messages.map((m) => m.answer).join("");
+  return Math.min(Array.from(text).length, SOURCE_CHARS_PER_MATERIAL);
+}
 
 type Phase = "choose" | "making" | "failed" | "limit";
 
@@ -80,6 +92,8 @@ interface RegenMeta {
  *   보던 글의 문체·길이를 미리 골라 둔다 (값이 없으면(직접 쓴 글) 고르지 않음, 28번 미정).
  *   3단계는 읽기 전용: 글의 추천 흐름·요청사항이 있으면 보여 주고, 둘 다 없으면 '요청사항 없이 만든 글이에요'.
  *   아래 '요청사항은 다시 만들 때 바뀌지 않아요.' (다시 만들기 요청에는 direction·request를 보내지 않음)
+ * - 2단계 [장문] 아래: 고른 소재 원문 합계(자유 기록 본문·문답 답, 소재당 1500자까지)가 SHORT_SOURCE_CHARS보다 짧으면
+ *   '고른 소재가 짧아요…' 안내 (목록 36번). 막지 않음. 새 글·다시 만들기 모두. 원문을 못 읽으면 안내 없음
  * - 만드는 동안 화면 전체를 덮고 다른 조작(뒤로가기 포함)을 막는다
  * - 헤더 [뒤로]: 2·3단계에서는 [이전]과 같이 한 단계 앞으로, 문체 단계에서는 이전 화면으로 (목록 11번).
  *   브라우저 뒤로 가기는 그대로 이전 화면
@@ -120,6 +134,10 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
   const [style, setStyle] = useState<Style | null>(null);
   const [length, setLength] = useState<EssayLength | null>(null);
   const [phase, setPhase] = useState<Phase>("choose");
+  /** 고른 소재 원문 글자 수 합계. 모르면(불러오는 중·실패) null */
+  const [sourceChars, setSourceChars] = useState<number | null>(null);
+  /** 다시 만들기: 글에 쓴 소재 id (원문 글자 수를 세는 데만 씀). 모르면 null */
+  const [regenMaterialIds, setRegenMaterialIds] = useState<string[] | null>(null);
   const direct = useDirectStart();
 
   /** 처음 누를 때 하나, [다시 시도]에도 같은 값 */
@@ -155,6 +173,9 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
           }
         } else {
           meta = { direction: res.data.direction, request: res.data.request };
+          // 장문 안내용 원문 글자 수: 소재함에서 지운 소재가 있으면 원문을 읽을 수 없어 세지 않는다 (안내 없음)
+          const mats = res.data.materials;
+          if (!cancelled && mats.length > 0 && mats.every((m) => !m.deleted)) setRegenMaterialIds(mats.map((m) => m.id));
           if (regen.base && "version" in regen.base) {
             const versionId = regen.base.version;
             const v = res.data.versions.find((x) => x.id === versionId);
@@ -195,6 +216,28 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
       cancelled = true;
     };
   }, [params, regen, attempt, goOnboardingIfNeeded, router, toast]);
+
+  // 고른 소재 원문 글자 수 합계 (짧으면 장문 안내). 다시 만들기는 글의 소재로 센다. 하나라도 실패하면 null (안내 없음)
+  const materialIds = regen ? regenMaterialIds : info?.materialIds;
+  useEffect(() => {
+    if (!materialIds || materialIds.length === 0) return;
+    let cancelled = false;
+    void Promise.all(materialIds.map((id) => getMaterial(id))).then((results) => {
+      if (cancelled) return;
+      let total = 0;
+      for (const r of results) {
+        if (!r.ok) {
+          setSourceChars(null);
+          return;
+        }
+        total += sourceCharsOf(r.data.original);
+      }
+      setSourceChars(total);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [materialIds]);
 
   /* ---------- 만들기 ---------- */
 
@@ -403,7 +446,12 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
           <section className="flex flex-col gap-3">
             <h2 className="text-lg font-bold">얼마나 길게 쓸까요?</h2>
             {LENGTHS.map((l) => (
-              <OptionCard key={l.value} title={l.label} description={l.description} selected={length === l.value} onClick={() => setLength(l.value)} />
+              <Fragment key={l.value}>
+                <OptionCard title={l.label} description={l.description} selected={length === l.value} onClick={() => setLength(l.value)} />
+                {l.value === "long" && sourceChars !== null && sourceChars < SHORT_SOURCE_CHARS && (
+                  <p className="px-1 text-sm text-ink-soft">고른 소재가 짧아요. 장문에는 기록에 없는 내용이 더해질 수 있어요</p>
+                )}
+              </Fragment>
             ))}
           </section>
         ) : (
