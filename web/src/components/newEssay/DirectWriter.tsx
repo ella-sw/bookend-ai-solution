@@ -41,7 +41,6 @@ interface Context {
   materialIds: string[];
   /** 참고 칸에 보일 소재 제목 */
   materialTitles: string[];
-  direction: string | null;
   suggestionId: string | null;
   title: string;
   body: string;
@@ -69,7 +68,6 @@ async function loadContext(params: NewEssayParams, resume: boolean): Promise<{ o
       essayId: null,
       materialIds: usable,
       materialTitles: usable.map((id) => byId.get(id)?.title?.trim() || "(제목 없음)"),
-      direction: sg && sg.ok ? sg.data.direction : null, // 제안 방향 그대로 (사용자 입력 없음, request는 보내지 않음)
       suggestionId: sg && sg.ok ? sg.data.id : null,
       title: "",
       body: "",
@@ -78,7 +76,7 @@ async function loadContext(params: NewEssayParams, resume: boolean): Promise<{ o
   };
 }
 
-const emptyContext = (): Context => ({ essayId: null, materialIds: [], materialTitles: [], direction: null, suggestionId: null, title: "", body: "" });
+const emptyContext = (): Context => ({ essayId: null, materialIds: [], materialTitles: [], suggestionId: null, title: "", body: "" });
 
 function fromDraft(d: EssayDraft): Context {
   const live = d.materials.filter((m) => !m.deleted);
@@ -86,7 +84,6 @@ function fromDraft(d: EssayDraft): Context {
     essayId: d.id,
     materialIds: live.map((m) => m.id),
     materialTitles: live.map((m) => m.title?.trim() || "(제목 없음)"),
-    direction: d.direction,
     suggestionId: d.suggestion_id,
     title: d.title ?? "",
     body: d.body,
@@ -95,7 +92,7 @@ function fromDraft(d: EssayDraft): Context {
 
 /**
  * N140 직접 쓰기 (UI 설계서 v7 20쪽, B essays.py draft·first_save)
- * - 참고 소재 칸(접힘 ▾): 고른 소재 제목, 제안의 방향. 소재 없이 왔으면 없음
+ * - 참고 소재 칸(접힘 ▾): 고른 소재 제목. 소재 없이 왔으면 없음 (direction은 보내지 않음, 11/24)
  * - 제목(100자, 선택)·본문(20,000자)·글자 수(본문만, 공백 포함)
  * - 열 때 save_token 하나. ?resume=draft면 임시 저장을 이어서 (그 essay_id 기억)
  * - [임시 저장] → '임시 저장했어요' 토스트. 404 draft_not_found면 essay_id 없이 한 번 더
@@ -181,7 +178,6 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
   const draftInput = (): SaveEssayDraftInput => ({
     title: titleOrNull(title),
     body,
-    direction: ctx?.direction ?? null,
     material_ids: ctx?.materialIds ?? [],
     suggestion_id: ctx?.suggestionId ?? null,
   });
@@ -277,7 +273,7 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
     );
   }
 
-  const hasReference = ctx.materialTitles.length > 0 || !!ctx.direction;
+  const hasReference = ctx.materialTitles.length > 0;
   const locked = savingEssay;
 
   return (
@@ -303,8 +299,7 @@ function DirectWriter({ params, resume }: { params: NewEssayParams; resume: bool
             </button>
             {refOpen && (
               <div className="mt-2 flex flex-col gap-1 leading-relaxed text-ink-soft">
-                {ctx.materialTitles.length > 0 && <p>{ctx.materialTitles.join(" · ")}</p>}
-                {ctx.direction && <p>방향: {ctx.direction}</p>}
+                <p>{ctx.materialTitles.join(" · ")}</p>
               </div>
             )}
           </section>

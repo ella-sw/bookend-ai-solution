@@ -64,14 +64,11 @@ type Phase = "choose" | "making" | "failed" | "limit";
 interface NewInfo {
   materialIds: string[];
   materialTitles: string[];
-  /** 추천 흐름: 제안(s)에서 왔고 제안에 방향이 있을 때만 */
-  direction: string | null;
   suggestionId: string | null;
 }
 
-/** 다시 만들기: 글에 저장된 추천 흐름·요청사항 (읽기 전용). 불러오지 못하면 null */
+/** 다시 만들기: 글에 저장된 요청사항 (읽기 전용). 불러오지 못하면 null */
 interface RegenMeta {
-  direction: string | null;
   request: string | null;
 }
 
@@ -79,19 +76,17 @@ interface RegenMeta {
  * W310 문체 · W320 길이 · 요청 (한 화면 3단계, UI 설계서 v7 21쪽, 목록 20·24·28번, B ai_essays.py)
  * - 1 문체 [다음] → 2 길이 [다음] → 3 요청 [이전] / [초안 만들기]
  * - 3단계 (처음 만들기): 위에 '문체: ○○ · 길이: ○○'
- *   '추천 흐름' 상자: 제안(s)에서 왔고 방향이 있을 때만. 읽기 전용 + [×](추천 흐름 빼기) → 상자가 사라지고
- *   이번 초안은 direction = null (되살리기 없음)
- *   '요청사항 (선택)': 빈칸에서 시작, 코드 포인트 200자. 추천 흐름이 있으면 '추천 흐름과 다르면 요청을 먼저 따라요.',
- *   없으면 '비워 두면 소재만 보고 써요.'
- *   요청 입력값·'추천 흐름 뺌'은 essayRequestStore(흐름 id·제안 id 키, 이 탭)에 보관, 주소에는 넣지 않음
+ *   '요청사항 (선택)': 빈칸에서 시작, 코드 포인트 200자. 아래 안내는 항상 '비워 두면 소재만 보고 써요.'
+ *   요청 입력값은 essayRequestStore(흐름 id·제안 id 키, 이 탭)에 보관, 주소에는 넣지 않음
+ *   direction은 보여 주지도 보내지도 않음 (팀 결정 11/24, 서버도 무시)
  * - 처음 만들기: 고른 소재(m)·제안(s)으로 [초안 만들기] → W330.
- *   direction = 추천 흐름(뺐거나 제안이 아니면 null), request = 입력값(비면 null)
+ *   request = 입력값(비면 null)
  *   writing_started(ai)는 처음 누를 때만 (다시 시도 제외). save_token도 처음 누를 때 하나.
- *   제안이 지워져(404) s 없이 다시 보낼 때도 direction·request는 그대로
+ *   제안이 지워져(404) s 없이 다시 보낼 때도 request는 그대로
  * - 다시 만들기 (?regen={essayId}&version=… 또는 &request=…): 처음 고른 소재로 [다시 만들기] → W340.
  *   보던 글의 문체·길이를 미리 골라 둔다 (값이 없으면(직접 쓴 글) 고르지 않음, 28번 미정).
- *   3단계는 읽기 전용: 글의 추천 흐름·요청사항이 있으면 보여 주고, 둘 다 없으면 '요청사항 없이 만든 글이에요'.
- *   아래 '요청사항은 다시 만들 때 바뀌지 않아요.' (다시 만들기 요청에는 direction·request를 보내지 않음)
+ *   3단계는 읽기 전용: 글의 요청사항이 있으면 보여 주고, 없으면 '요청사항 없이 만든 글이에요'.
+ *   아래 '요청사항은 다시 만들 때 바뀌지 않아요.' (다시 만들기 요청에는 request를 보내지 않음)
  * - 2단계 [장문] 아래: 고른 소재 원문 합계(자유 기록 본문·문답 답, 소재당 1500자까지)가 SHORT_SOURCE_CHARS보다 짧으면
  *   '고른 소재가 짧아요…' 안내 (목록 36번). 막지 않음. 새 글·다시 만들기 모두. 원문을 못 읽으면 안내 없음
  * - 만드는 동안 화면 전체를 덮고 다른 조작(뒤로가기 포함)을 막는다
@@ -128,9 +123,8 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
   const [infoOpen, setInfoOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [regenMeta, setRegenMeta] = useState<RegenMeta | null>(null);
-  /** 3단계 요청사항 입력값 · 추천 흐름을 뺐는지 (essayRequestStore에 보관) */
+  /** 3단계 요청사항 입력값 (essayRequestStore에 보관) */
   const [requestText, setRequestText] = useState("");
-  const [flowRemoved, setFlowRemoved] = useState(false);
   const [style, setStyle] = useState<Style | null>(null);
   const [length, setLength] = useState<EssayLength | null>(null);
   const [phase, setPhase] = useState<Phase>("choose");
@@ -162,7 +156,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
           const r = getRegenResult(regen.essayId, regen.base.request);
           if (r) preset = { style: r.style, length: r.length };
         }
-        // 글의 추천 흐름·요청사항 (3단계 읽기 전용). 버전 바탕이면 그 버전의 문체·길이도
+        // 글의 요청사항 (3단계 읽기 전용). 버전 바탕이면 그 버전의 문체·길이도
         const res = await getEssay(regen.essayId);
         if (!res.ok) {
           if (cancelled || goOnboardingIfNeeded(res.error)) return;
@@ -172,7 +166,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
             return;
           }
         } else {
-          meta = { direction: res.data.direction, request: res.data.request };
+          meta = { request: res.data.request };
           // 장문 안내용 원문 글자 수: 소재함에서 지운 소재가 있으면 원문을 읽을 수 없어 세지 않는다 (안내 없음)
           const mats = res.data.materials;
           if (!cancelled && mats.length > 0 && mats.every((m) => !m.deleted)) setRegenMaterialIds(mats.map((m) => m.id));
@@ -186,7 +180,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
         if (preset?.style) setStyle(preset.style);
         if (preset?.length) setLength(preset.length);
         setRegenMeta(meta);
-        setInfo({ materialIds: [], materialTitles: [], direction: null, suggestionId: null });
+        setInfo({ materialIds: [], materialTitles: [], suggestionId: null });
       })();
       return () => {
         cancelled = true;
@@ -204,12 +198,10 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
       setInfo({
         materialIds: usable,
         materialTitles: usable.map((id) => byId.get(id)?.title?.trim() || "(제목 없음)"),
-        direction: sg && sg.ok ? sg.data.direction?.trim() || null : null,
         suggestionId: sg && sg.ok ? sg.data.id : null,
       });
       const saved = readEssayRequest(params);
       setRequestText(saved.request);
-      setFlowRemoved(saved.flowRemoved);
       setLoadFailed(false);
     });
     return () => {
@@ -295,7 +287,6 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     const send = () =>
       createAiDraft({
         material_ids: info.materialIds,
-        direction: flowRemoved ? null : info.direction,
         request: normalizeEssayRequest(requestText),
         style,
         length,
@@ -399,9 +390,6 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
     );
   }
 
-  /** 3단계에 보일 추천 흐름 (뺐으면 없음) */
-  const flow = flowRemoved ? null : info.direction;
-
   return (
     <>
       {header}
@@ -463,25 +451,6 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
               <RegenRequestView meta={regenMeta} />
             ) : (
               <>
-                {flow && (
-                  <div className="rounded-xl border border-line px-4 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-sm font-semibold text-ink-soft">추천 흐름</h2>
-                      <button
-                        type="button"
-                        aria-label="추천 흐름 빼기"
-                        onClick={() => {
-                          setFlowRemoved(true);
-                          writeEssayRequest(params, { request: requestText, flowRemoved: true });
-                        }}
-                        className="-mr-2 flex size-8 items-center justify-center rounded-full text-ink-mute active:bg-subtle"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <p className="mt-1 text-[15px] leading-relaxed">{flow}</p>
-                  </div>
-                )}
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="essay-request" className="text-sm font-semibold text-ink-soft">
                     요청사항 (선택)
@@ -491,16 +460,16 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
                     value={requestText}
                     rows={3}
                     aria-describedby="request-help request-count"
-                    placeholder="원하는 흐름이나 요청을 적어 주세요. 예: 편지 형식으로"
+                    placeholder="원하는 점을 적어 주세요. 예: 편지 형식으로"
                     onChange={(event) => {
                       const value = limitEssayRequest(event.target.value);
                       setRequestText(value);
-                      writeEssayRequest(params, { request: value, flowRemoved });
+                      writeEssayRequest(params, { request: value });
                     }}
                     className="w-full resize-none rounded-xl border border-line bg-surface px-4 py-3 text-[15px] leading-relaxed focus:border-primary focus:outline-none"
                   />
                   <div className="flex justify-between gap-2 text-xs text-ink-mute">
-                    <p id="request-help">{flow ? "추천 흐름과 다르면 요청을 먼저 따라요." : "비워 두면 소재만 보고 써요."}</p>
+                    <p id="request-help">비워 두면 소재만 보고 써요.</p>
                     <p id="request-count">
                       {Array.from(requestText).length}/{ESSAY_RULES.requestMax}
                     </p>
@@ -542,19 +511,12 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
   );
 }
 
-/** 다시 만들기 3단계: 글의 추천 흐름·요청사항 (읽기 전용). 불러오지 못했으면(meta = null) 안내 문구만 */
+/** 다시 만들기 3단계: 글의 요청사항 (읽기 전용). 불러오지 못했으면(meta = null) 안내 문구만 */
 function RegenRequestView({ meta }: { meta: RegenMeta | null }) {
-  const direction = meta?.direction?.trim() || null;
   const request = meta?.request?.trim() || null;
   return (
     <div className="flex flex-col gap-3">
-      {meta && !direction && !request && <p className="rounded-xl bg-subtle px-4 py-3 text-[15px]">요청사항 없이 만든 글이에요</p>}
-      {direction && (
-        <div className="rounded-xl border border-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-ink-soft">추천 흐름</h2>
-          <p className="mt-1 text-[15px] leading-relaxed">{direction}</p>
-        </div>
-      )}
+      {meta && !request && <p className="rounded-xl bg-subtle px-4 py-3 text-[15px]">요청사항 없이 만든 글이에요</p>}
       {request && (
         <div className="rounded-xl border border-line px-4 py-3">
           <h2 className="text-sm font-semibold text-ink-soft">요청사항</h2>
