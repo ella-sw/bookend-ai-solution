@@ -284,12 +284,33 @@ async def daily_questions_today(user: User, ai: AI) -> DailyQuestions:
                     (today, i, q),
                 )
 
-    async with owner_tx() as conn:
-        rows = await (await conn.execute(
-            "select id, seq, question from daily_questions where question_date = %s "
-            "order by seq", (today,),
-        )).fetchall()
-    return DailyQuestions(date=today, questions=[DailyQuestion(**r) for r in rows])
+        async with owner_tx() as conn:
+                rows = await (await conn.execute(
+                    "select id, seq, question from daily_questions where question_date = %s "
+                    "order by seq", (today,),
+                )).fetchall()
+
+            # 오늘 이 사용자가 이미 첫 질문으로 사용한 daily_question_id 조회
+        async with user_tx(user.id) as conn:
+                used_rows = await (await conn.execute(
+                    "select distinct m.daily_question_id "
+                    "from qna_messages m "
+                    "join records r on r.id = m.record_id "
+                    "join daily_questions d on d.id = m.daily_question_id "
+                    "where r.user_id = auth.uid() "
+                    "and m.question_source = 'daily' "
+                    "and d.question_date = %s",
+                    (today,),
+                )).fetchall()
+
+        used_ids = {r["daily_question_id"] for r in used_rows}
+
+            # 1~30 순서는 유지하되, 안 쓴 질문을 앞으로 / 이미 쓴 질문을 뒤로 배치
+        ordered = [r for r in rows if r["id"] not in used_ids] + [
+                r for r in rows if r["id"] in used_ids
+            ]
+
+        return DailyQuestions(date=today, questions=[DailyQuestion(**r) for r in ordered])
 
 
 # ---------------------------------------------------------------------------
