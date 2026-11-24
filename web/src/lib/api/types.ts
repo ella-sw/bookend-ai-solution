@@ -326,8 +326,8 @@ export interface Suggestion {
   id: Uuid;
   topic: TopicRef;
   title: string;
-  /** 소재를 엮는 방식 한 문장 (목록 20번). N120·N140에서 읽기 전용으로 보여 주고 글에 넘긴다 */
-  direction: string;
+  /** 서버가 null을 줄 수 있음. 화면에 쓰지 않음 (11/24) */
+  direction: string | null;
   reason: string;
   materials: SuggestionMaterial[];
   computed_at: IsoTime;
@@ -410,7 +410,7 @@ export interface Essay {
   id: Uuid;
   method: "direct" | "ai";
   title: string | null;
-  /** 추천 흐름 (제안 direction) */
+  /** 옛 글에 값이 있을 수 있음. 화면에 쓰지 않음 (11/24) */
   direction: string | null;
   /** 사용자 요청사항 (AI 글만, 선택). 다시 만들기에서는 바뀌지 않음 */
   request: string | null;
@@ -454,9 +454,7 @@ export interface SaveEssayInput extends SaveEssayDraftInput {
 export interface CreateAiDraftInput {
   /** 고른 소재 (1개 이상), 고른 순서대로 */
   material_ids: Uuid[];
-  /** 추천 흐름 (제안 direction). 사용자가 빼면 null */
-  direction?: string | null;
-  /** 사용자 요청사항 (선택, 200자). direction과 별개 */
+  /** 사용자 요청사항 (선택, 200자) */
   request?: string | null;
   style: Style;
   length: EssayLength;

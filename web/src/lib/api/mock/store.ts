@@ -159,7 +159,8 @@ export interface MockSuggestion {
   id: Uuid;
   topic_id: number;
   title: string;
-  direction: string;
+  /** 서버가 null을 줄 수 있음 (11/24) */
+  direction: string | null;
   reason: string;
   material_ids: Uuid[];
   computed_at: string;
@@ -293,7 +294,7 @@ function createDb(): MockDb {
         id: "sug-sample-1",
         topic_id: topicId("가족"),
         title: "독립한 뒤 달라진 가족의 의미",
-        direction: "혼자 지내며 가족을 떠올린 순간들을 시간 순서로 엮어요.",
+        direction: null, // null 경로 확인용 (11/24)
         reason: "세 기록 모두 혼자 지내며 가족을 떠올린 장면이에요.",
         material_ids: ["mat-sample-3", "mat-sample-1", "mat-sample-2"],
         computed_at: daysAgo(0),
