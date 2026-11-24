@@ -31,6 +31,10 @@ class CountingAI(StubSuggestAI):
             return AISuggest(None, 1, 1)
         if self.mode == "foreign":
             return AISuggest(AISuggestion("제목", "방향", "이유", ["not-a-given-id"] * 3), 1, 1)
+        if self.mode == "no_direction":
+            out = await super().suggest(topic, materials, min_materials)
+            s = out.suggestion
+            return AISuggest(AISuggestion(s.title, "", s.reason, s.material_ids), 1, 1)
         if self.mode == "late":
             with psycopg.connect(TEST_URL, autocommit=True) as c:
                 c.execute("update ai_requests set status = 'timeout' "
@@ -234,3 +238,15 @@ def test_material_in_another_essay_still_counts_once_that_one_is_deleted(client,
     assert row(owner, a) is None  # 아직 다른 글에 쓰여 있음
     client.delete(f"/essays/{second}", headers=auth(a))
     assert row(owner, a)["status"] == "ready"
+
+
+def test_suggestion_without_direction_is_shown(client, make_user):
+    """팀 결정 11/25: 글의 방향은 쓰지 않는다 → AI가 비워 보내도 제안은 뜬다."""
+    a = make_user()
+    use_ai(CountingAI("no_direction"))
+    for t in ("이사 첫날", "엄마와의 통화", "혼자 아팠던 날"):
+        material(client, a, t)
+    (s,) = listing(client, a)["suggestions"]
+    assert s["title"] and s["reason"] and s["direction"] is None
+    assert len(s["materials"]) == 3
+
