@@ -1,8 +1,8 @@
 """AI connection point (C's part).
 
-The API code only calls the interfaces below (`QuestionAI`, `MaterialAI`). To use a
-real model, C adds classes with the same methods (e.g. `OpenAIQuestionAI`) and returns
-them from `get_question_ai()` / `get_material_ai()` when `AI_PROVIDER` says so.
+The API code only calls the interfaces below (`QuestionAI`, `MaterialAI`, `EssayAI`, `SuggestAI`).
+To use a real model, C implements classes with the same methods and returns
+them from `get_*_ai()` when `AI_PROVIDER=openai`.
 Nothing else changes.
 
 Rules the real implementation must keep:
@@ -10,10 +10,10 @@ R05 QuestionAI
 - next_question: one question at a time, based on the conversation so far.
   Never invent experiences or feelings that are not in the answers.
   Do not repeat the direction of questions in `avoid` (replaced questions).
-- daily_questions: exactly 30 questions shared by all users for that date.
+- daily_questions: 30 questions generated once per date and shared across requests.
 R28 MaterialAI
 - extract_material: 0 or 1 material from what the user wrote (`source.user_text()`).
-  No writing material → return `material=None` (소재 없음); never an empty material.
+  No writing material -> return `material=None` (소재 없음); never an empty material.
 - Never add experiences or feelings that are not in the text.
 - `evidence` must be a sentence copied from `source.user_text()` (the server checks).
 - `topics` are names from the given list (one or more).
@@ -33,16 +33,22 @@ R30 SuggestAI
 - The reason explains the grouping with the materials' actual content.
 """
 
-import re
-import os
+import asyncio
 import json
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from functools import lru_cache
 from typing import Protocol
 
+from dotenv import load_dotenv
 from openai import OpenAI
+
 from app.config import get_settings
+
+load_dotenv()
+
 
 @dataclass
 class Turn:
@@ -173,121 +179,300 @@ class EssayAI(Protocol):
 
 
 class SuggestAI(Protocol):
-    async def suggest(self, topic: str, materials: list[SuggestMaterial],
-                      min_materials: int) -> AISuggest:
+    async def suggest(
+        self, topic: str, materials: list[SuggestMaterial], min_materials: int
+    ) -> AISuggest:
         """R30: one writing suggestion for a topic, or None."""
 
+
 # ==========================================
-# [C 작업 영역] 실제 OpenAI API 구현 클래스
+# 모델 라우팅 및 JSON/텍스트 파싱 헬퍼 (main.py 최종 로직 반영)
+# ==========================================
+_LOGIC_MODEL = os.getenv("LOGIC_LLM_MODEL", os.getenv("LLM_MODEL", "gpt-5.4"))
+_ESSAY_MODEL = os.getenv("ESSAY_LLM_MODEL", os.getenv("LLM_MODEL", "claude-sonnet-5"))
+
+
+def _build_logic_client() -> OpenAI:
+    api_key = (
+        os.getenv("LOGIC_API_KEY")
+        or os.getenv("ELICE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    base_url = os.getenv("LOGIC_BASE_URL") or os.getenv("LLM_BASE_URL")
+    return OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+
+
+def _build_essay_client() -> OpenAI:
+    api_key = (
+        os.getenv("ESSAY_API_KEY")
+        or os.getenv("ELICE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    base_url = os.getenv("ESSAY_BASE_URL") or os.getenv("LLM_BASE_URL")
+    return OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+
+
+def _unwrap_target_key(data: object, target_key: str) -> dict | None:
+    if isinstance(data, dict):
+        if target_key in data:
+            return dict(data)
+        for v in data.values():
+            found = _unwrap_target_key(v, target_key)
+            if isinstance(found, dict):
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _unwrap_target_key(item, target_key)
+            if isinstance(found, dict):
+                return found
+    return None
+
+
+def _clean_essay_text(text: str | None) -> str:
+    """모델 응답 끝에 간혹 붙는 XML 찌꺼기 태그 제거"""
+    if not text:
+        return ""
+    cleaned = re.sub(r"</?(?:essay_content|retouched_content|invoke)>\s*", "", text)
+    return cleaned.strip()
+
+
+def _parse_json_response(
+    raw_content: str | None,
+    target_key: str | None = None,
+    drop_key: str | None = None,
+) -> dict:
+    raw = (raw_content or "").strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+    data = json.loads(cleaned, strict=False)
+    if not isinstance(data, dict):
+        return {}
+    if target_key:
+        unwrapped = _unwrap_target_key(data, target_key)
+        if isinstance(unwrapped, dict):
+            for k, v in data.items():
+                if k not in unwrapped:
+                    unwrapped[k] = v
+            data = unwrapped
+    if drop_key:
+        data.pop(drop_key, None)
+    if target_key in ("essay_content", "retouched_content") and isinstance(data.get(target_key), str):
+        data[target_key] = _clean_essay_text(data[target_key])
+    return data
+
+
+# ==========================================
+# [C 작업 영역] 실제 AI 구현 클래스
 # ==========================================
 class OpenAIQuestionAI:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = _build_logic_client()
+        self.logic_model = _LOGIC_MODEL
+        self._daily_cache: dict[date, list[str]] = {}
+        self._daily_lock = asyncio.Lock()
 
     async def next_question(self, turns: list[Turn], avoid: list[str]) -> AIText:
         avoid_str = "\n- ".join(avoid) if avoid else "없음"
-        
         system_prompt = f"""
-        당신은 사용자의 감정을 깊이 있게 이끌어내는 전문 인터뷰어입니다.
-        이전 대화 기록을 분석하여 '단 하나의 꼬리 질문'을 작성하세요.
-        
-        [절대 규칙]
-        1. 아래 JSON으로 응답할 것: {{"next_question": "생성된 질문"}}
-        2. 복합 질문 절대 금지 (물음표 1개만 사용)
-        3. 아래 피해야 할 질문과 겹치지 않게 완전히 새로운 방향으로 작성하세요:
-        - {avoid_str}
-        4. 사용자의 답변에 없는 경험이나 감정을 지어내지 마세요.
+        당신은 사용자의 일상과 기억을 자연스럽게 이끌어내는 전문 인터뷰어입니다.
+        사용자의 이전 대화 기록을 분석하여, 글감을 구체화할 수 있는 '단 하나의 후속 질문'만 작성하세요.
+
+        [1차 평가 필수 개선 및 절대 규칙]
+        1. 반드시 아래 JSON 형식으로만 응답할 것.
+           {{"next_question": "생성된 단일 질문 내용"}}
+        2. 단일 초점 및 복합 질문 절대 금지 (가장 중요):
+           - 한 번에 오직 '한 가지'만 물어보세요. 물음표(?)는 문장 끝에 딱 1개만 사용하세요.
+           - 한 문장 안에 두 가지 질문을 접속사로 이어 붙이지 마세요. (나쁜 예: "물에 떠 있던 느낌이 어땠는지, 그리고 어떤 의미였는지 말해줄 수 있나요?" -> 좋은 예: "물에 처음 떠 있었던 짧은 순간, 몸에 전해지던 감각은 어땠나요?")
+        3. 아래 거절된 질문과 표면적 단어만 바꾼 유사 질문을 생성하지 말고 완전히 새로운 측면에서 질문하세요:
+           - {avoid_str}
+        4. 사용자 답변 충실성 및 단정 금지:
+           - 사용자가 언급하지 않은 감정, 실패, 두려움, 피로, 자신감 부족 등을 임의로 단정하거나 전제하지 마세요.
+           - 사용자가 자세히 쓰고 싶지 않다고 한 이유는 다시 캐묻지 말고, 남기고 싶어 하는 장면이나 행동으로 질문을 전환하세요.
+        5. 감각 및 장면 구체화 유도:
+           - 사용자가 어떤 장면을 어떻게 설명할지 막막해한다면, 추상적인 '감정'이나 '생각/의미'를 묻지 말고 눈에 보인 모양, 빛, 크기, 소리, 행동 등 구체적인 감각 요소 중 딱 한 가지를 쉽게 떠올릴 수 있도록 질문하세요.
         """
-        
+
         chat_history = []
         for t in turns:
             chat_history.append({"role": "assistant", "content": t.question})
             if t.answer:
                 chat_history.append({"role": "user", "content": t.answer})
-                
+
         messages = [{"role": "system", "content": system_prompt}] + chat_history
-        
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.logic_model,
                 messages=messages,
                 response_format={"type": "json_object"},
+                max_completion_tokens=512,
             )
-            result = json.loads(response.choices[0].message.content)
+            result = _parse_json_response(
+                response.choices[0].message.content, target_key="next_question"
+            )
             return AIText(
                 text=result.get("next_question", "질문을 생성하지 못했습니다."),
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                output_tokens=response.usage.completion_tokens if response.usage else 0,
             )
         except Exception as e:
             raise AIError(f"OpenAI API 실패: {str(e)}")
 
     async def daily_questions(self, for_date: date) -> AIQuestions:
-        # 실제 운영 시 매일 공통 질문을 동적으로 생성하거나 DB에서 가져올 수 있음
-        # 현재는 Stub의 공통 질문 방식을 차용
-        shift = for_date.toordinal() % len(_STUB_DAILY)
-        questions = _STUB_DAILY[shift:] + _STUB_DAILY[:shift]
-        return AIQuestions(questions=questions, input_tokens=0, output_tokens=0)
+        if for_date in self._daily_cache:
+            return AIQuestions(
+                questions=list(self._daily_cache[for_date]),
+                input_tokens=0,
+                output_tokens=0,
+            )
+
+        async with self._daily_lock:
+            if for_date in self._daily_cache:
+                return AIQuestions(
+                    questions=list(self._daily_cache[for_date]),
+                    input_tokens=0,
+                    output_tokens=0,
+                )
+
+            system_prompt = """
+            당신은 사용자의 일상 기록과 에세이 글감을 끌어내는 전문 인터뷰어입니다.
+            오늘 사용자가 부담 없이 첫 문장을 시작할 수 있도록 '서로 다른 주제의 첫 질문 30개'를 생성하세요.
+
+            [절대 규칙]
+            1. 반드시 아래 JSON 형식으로만 응답하세요.
+               {"questions": ["질문1", "질문2", ..., "질문30"]}
+            2. `questions` 배열에는 중복 없이 정확히 30개의 한국어 질문만 담으세요.
+            3. 모든 질문은 한 번에 한 가지만 묻는 단일 질문이어야 합니다. (문장 끝 물음표(?) 1개만 사용, 접속사로 두 질문 이어 붙이기 금지)
+            4. 가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절 등 다양한 주제를 골고루 섞으세요.
+            5. 사용자가 겪지 않았을 부정적 경험이나 과도한 감정을 전제하지 말고, 누구나 떠올릴 수 있는 구체적 장면·감각·순간을 따뜻하고 담백하게 물어보세요.
+            """
+
+            user_prompt = (
+                f"기준 날짜: {for_date.isoformat()}\n"
+                "이 날짜에 모든 사용자에게 공통으로 제공할 서로 다른 첫 질문 30개를 생성해 주세요."
+            )
+
+            try:
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    model=self.logic_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                )
+                raw = _parse_json_response(
+                    response.choices[0].message.content, target_key="questions"
+                )
+                questions = [
+                    str(q).strip()
+                    for q in raw.get("questions", [])
+                    if isinstance(q, str) and str(q).strip()
+                ]
+
+                deduped = list(dict.fromkeys(questions))
+                if len(deduped) < 30:
+                    for fallback_q in _STUB_DAILY:
+                        if fallback_q not in deduped:
+                            deduped.append(fallback_q)
+                        if len(deduped) == 30:
+                            break
+                final_questions = deduped[:30]
+
+                self._daily_cache.clear()
+                self._daily_cache[for_date] = final_questions
+
+                return AIQuestions(
+                    questions=list(final_questions),
+                    input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                    output_tokens=response.usage.completion_tokens if response.usage else 0,
+                )
+            except Exception:
+                shift = for_date.toordinal() % len(_STUB_DAILY)
+                fallback = _STUB_DAILY[shift:] + _STUB_DAILY[:shift]
+                return AIQuestions(questions=fallback, input_tokens=0, output_tokens=0)
 
 
 class OpenAIMaterialAI:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = _build_logic_client()
+        self.logic_model = _LOGIC_MODEL
 
     async def extract_material(self, source: ExtractSource, topics: list[str]) -> AIExtract:
         user_text = source.user_text().strip()
         if not user_text:
             return AIExtract(material=None, input_tokens=0, output_tokens=0)
-            
-        topics_str = ", ".join(topics)
-        
+
+        topics_str = ", ".join(topics) if topics else "가족, 관계, 나·성장, 일·직업, 일상, 여행·장소, 음식, 취향·취미, 몸·건강, 자연·계절"
         system_prompt = f"""
         당신은 사용자의 일상 기록에서 글감을 추출하는 전문 AI 편집자입니다.
-        반드시 아래 JSON 형식으로만 응답하세요.
+        반드시 아래 JSON 형식으로만 응답하세요. 다른 말은 덧붙이지 마세요.
         {{
             "title": "추출된 소재의 핵심을 담은 짧은 제목",
-            "summary": "핵심 내용을 1문장으로 요약 (절대 비워두지 말 것)",
-            "keywords": ["핵심단어1", "핵심단어2"],
-            "topic": "선택된 주제",
+            "summary": "핵심 내용을 1문장으로 요약",
+            "keywords": ["핵심단어1", "핵심단어2", "핵심단어3"],
+            "topic_ids": ["선택된 주제1", "선택된 주제2"],
             "evidence": "소재 추출의 근거가 되는 원본 기록 내 문장 발췌"
         }}
-        
-        [서버 검증 필수 통과 규칙]
-        1. evidence (근거 문장): 사용자의 원본 기록에서 글자 하나 틀리지 않고 100% 동일하게 발췌해야 합니다. AI가 임의로 다듬거나 지어내면 실패 처리됩니다.
-        2. topic (주제): 반드시 다음 제공된 목록 중 1개만 선택하세요. [{topics_str}]
-        3. keywords (키워드 추천용): 
-           - 조사 및 어미 제거: 명사형 단어만 남기세요. (예: "엄마랑" -> "엄마")
-           - 구절 금지 및 복합 명사 허용: "엄마의 반찬을 먹었다" 같은 서술어가 포함된 구절은 금지. 단, "수면 부족"처럼 의미 보존을 위해 꼭 필요한 '복합 명사'는 허용.
-           - 엄격한 동의어 통일: "어머니"와 "엄마"처럼 완벽히 동일한 대상을 지칭할 때만 대표 명사로 통일.
+        [1차 평가 필수 개선 및 서버 검증 규칙]
+        1. 원문 충실성 (추론·과장·왜곡 절대 금지):
+           - 원문에 명시되지 않은 감정이나 의미를 임의로 덧붙이지 마세요. (예: 의자를 내주어 감사했다는 글에 '따뜻한 순간' 추가 금지 / 비뚤어진 접시에 귤을 올려놓아 내가 만든 접시임이 실감 났다는 글에 '비뚤어진 가장자리를 통해 성취감을 느꼈다'라고 감정과 계기를 왜곡 금지)
+           - 사건 발생 장소와 시간적 순서, 인과관계를 정확히 유지하세요. (예: '버스에서 내린 뒤 걸어가다가 목욕탕 간판을 봤다'를 '버스 정거장에서 간판을 봤다'로 왜곡 금지)
+           - 기록에 '과정 -> 발견 -> 앞으로의 다짐/생각 변화'(예: 수면 시간 기록 -> 평일 수면 부족 발견 -> 평일 수면부터 살펴보려는 다짐)가 있다면 요약에 그 핵심 흐름과 다짐까지 빠짐없이 반영하세요.
+        2. evidence (근거 문장):
+           - 반드시 사용자의 원본 기록에 존재하는 문장을 글자 하나 바꾸지 말고 100% 그대로 발췌하세요.
+           - 도입부의 사소한 문장이 아니라, 중심 사건과 생각/감정을 뒷받침하는 핵심 문장을 선택하세요.
+        3. topic_ids (주제 분류 엄격 기준):
+           - 반드시 다음 제공된 목록 중 내용에 정확히 부합하는 1~2개만 선택하세요: [{topics_str}]
+           - 단순히 타인이나 소품이 등장했다는 이유만으로 주제나 키워드를 과도하게 확장하지 마세요.
+        4. keywords (추천 매칭용 핵심 명사):
+           - 조사 및 어미를 제거한 기본형 명사만 남기세요. (서술어가 포함된 구절 금지, '수면 부족'처럼 의미 보존에 필수적인 복합 명사는 허용)
+           - 중심 내용과 무관한 도입부 단어, 원문에 없는 추상적 해석 단어, 핵심 의미가 없는 일반 시간 표현은 키워드에서 절대 제외하세요.
         """
-        
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.logic_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text}
+                    {"role": "user", "content": user_text},
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.2 
+                temperature=0.3,
+                max_completion_tokens=1024,
             )
-            result = json.loads(response.choices[0].message.content)
-            
-            # 서버 검증(빈 값) 1차 방어
+            result = _parse_json_response(
+                response.choices[0].message.content, target_key="evidence"
+            )
             if not result.get("summary") or not result.get("evidence"):
-                return AIExtract(material=None, input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens)
-                
+                return AIExtract(
+                    material=None,
+                    input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                    output_tokens=response.usage.completion_tokens if response.usage else 0,
+                )
+
+            raw_topics = result.get("topic_ids")
+            if isinstance(raw_topics, list):
+                parsed_topics = [str(t).strip() for t in raw_topics if str(t).strip()]
+            elif result.get("topic"):
+                parsed_topics = [str(result.get("topic")).strip()]
+            else:
+                parsed_topics = []
+
             material = ExtractedMaterial(
                 title=result.get("title", ""),
                 summary=result.get("summary", ""),
                 evidence=result.get("evidence", ""),
-                keywords=result.get("keywords", []),
-                topics=[result.get("topic", "")]
+                keywords=result.get("keywords", []) if isinstance(result.get("keywords"), list) else [],
+                topics=parsed_topics,
             )
             return AIExtract(
                 material=material,
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                output_tokens=response.usage.completion_tokens if response.usage else 0,
             )
         except Exception as e:
             raise AIError(f"Material 추출 실패: {str(e)}")
@@ -295,101 +480,204 @@ class OpenAIMaterialAI:
 
 class OpenAIEssayAI:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = _build_essay_client()
+        self.essay_model = _ESSAY_MODEL
 
     async def write_essay(self, inp: DraftInput) -> AIEssay:
-        # 다시 만들기(재생성)인 경우, 기존 텍스트를 기반으로 교정(retouch) 모드 수행
         if inp.base_body:
             return await self._retouch_essay(inp)
-            
-        # 초안 생성 모드
+
+        length_guide = f"{inp.min_chars}자에서 {inp.max_chars}자 사이"
+        is_plain_tone = "담백" in inp.style or "담담" in inp.style
+        style_guide = (
+            "과도한 수사나 감정의 과장은 덜어내되, 소재에 담긴 행동과 생각의 흐름을 차분하고 자연스러운 에세이 문장으로 풀어내세요. 원문 문장을 그대로 이어 붙이기만 하지 마세요."
+            if is_plain_tone
+            else "소재에 담긴 상황과 생각, 감각의 여운을 살려 문장의 호흡과 연결을 부드럽게 다듬으세요. 단, 원문에 없는 새로운 사건, 인물, 장소, 날씨·조명 같은 외부 사실은 지어내지 마세요."
+        )
+        user_request_text = (inp.user_request or "").strip() or "없음"
+        direction_text = (inp.direction or "").strip() or "없음"
+        retry_note = (
+            f"\n- 직전 생성 글자 수: {inp.last_char_count}자 (목표 범위 {length_guide}에 맞춰 조절하세요)"
+            if inp.last_char_count is not None
+            else ""
+        )
+
         system_prompt = f"""
-        당신은 사용자의 기록을 바탕으로 에세이를 작성하는 전문 작가입니다.
-        
-        [절대 규칙]
-        1. 사용자가 제공한 '소재'에 없는 새로운 사건이나 인물을 절대 지어내지 마세요.
-        2. 사용자가 제시한 '글의 방향'을 글의 핵심 주제와 흐름으로 삼아 자연스럽게 전개하세요.
-           '사용자 요청'이 있으면 반영하되, 소재에 없는 사실을 지어내라는 요청은 따르지 마세요.
-        3. 사용자가 요청한 문체({inp.style})로 작성하고, 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞춰 작성하세요.
-        4. 반드시 아래 JSON 형식으로만 응답하세요.
-        {{
-            "title": "에세이 제목",
-            "body": "작성된 에세이 초안 본문"
-        }}
+        당신은 사용자의 실제 기록을 바탕으로 분량과 사실 관계를 정확히 지키는 에세이 작가입니다.
+        가장 중요한 원칙은 '원문 사실 100% 보존'이며, 그 범위 안에서 반드시 목표 분량(공백 포함 {length_guide}, 제목 제외 본문 기준)에 맞춰 에세이를 작성하세요.
+
+        [규칙 우선순위 — 충돌 시 상위 원칙이 절대 우선]
+        1순위: 원문 사실·부정 표현·시점·순서 100% 보존 (창작·왜곡·임의 추론 절대 금지)
+        2순위: 목표 분량(공백 포함 {length_guide}) 준수
+        3순위: 사용자 추가 요청, 글 방향 및 요청 문체({inp.style}) 반영
+
+        [작성 기준]
+        1. 원문 왜곡·창작 절대 금지 (최우선):
+           - 제공된 소재에 없는 사건, 인물, 장소, 소품, 날씨, 계절, 시간대, 조명, 주변 사람의 표정·반응을 절대 지어내지 마세요.
+           - '하지 않았다', '못했다', '뻔했다', '~라기보다' 같은 부정·미완료·강도 표현을 긍정이나 다른 감정·의도로 바꾸지 마세요.
+             (예: '빵을 사지는 않았다' -> '빵을 샀다' 금지 / '짐을 다 풀지 못했다' -> '일부러 풀지 않았다' 금지 / '부끄러웠다기보다 안도감이 들었다' -> '부끄러웠다' 금지)
+           - 서로 다른 날이나 시기의 소재를 같은 날 일어난 일처럼 합치지 말고, 원문에 없는 교훈·다짐·인생 깨달음으로 글을 마무리하지 마세요.
+
+        2. 목표 분량({length_guide}) 달성 기준 (공백 포함, 본문 기준):
+           - 임의 창작이나 같은 의미의 단순 반복 없이, 아래 방식으로 분량을 조절하세요:
+             · 짧은 목표 구간(예: 300~500자): 핵심 상황과 생각 위주로 군더더기 없이 2~3문단으로 구성합니다.
+             · 긴 목표 구간(예: 1,000~1,500자): 소재에 제시된 상황·행동 과정·생각의 흐름을 단계별로 세세히 풀어 4~5문단으로 구성합니다.
+           - 분량이 모자랄 때는 원문에 있는 행동 과정과 생각의 맥락을 차분히 풀어서 채우고, 분량이 넘칠 때는 중복 표현과 장황한 수식을 줄여 목표 범위({length_guide}) 안에 맞추세요.
+           - 단, 원문 정보량이 매우 적어 허구 없이 목표 분량에 닿기 어려운 경우에도 새 사실을 지어내지 말고, 허용된 사실 안에서 자연스럽게 완결하세요.
+
+        3. 문체, 글 방향 및 사용자 추가 요청 반영:
+           - 요청 문체({inp.style}): {style_guide}
+           - 글 방향({direction_text})이 '없음'이 아니면 원문 사실관계를 해치지 않는 범위에서 반영하세요.
+           - 사용자 추가 요청({user_request_text})이 '없음'이 아니면 원문 사실관계를 해치지 않는 범위에서 반영하세요.
+
+        4. 출력 형식 및 최종 점검:
+           - 출력 전 본문의 공백 포함 글자 수가 목표 분량({length_guide})에 들어오는지, 원문 왜곡과 표현 반전이 없는지 확인하세요.
+           - 제목, XML 태그, 마크다운 기호, 코드블록, 부연 설명 없이 반드시 아래 JSON 형식으로만 응답하세요.
+             {{
+                 "title": "에세이 제목",
+                 "essay_content": "에세이 초안 본문"
+             }}
         """
-        
+
         materials_info = []
         for m in inp.materials:
-            materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
-        materials_text = "\n".join(materials_info)
-        
-        user_prompt = (f"- 글의 방향: {inp.direction or '없음'}\n"
-                       f"- 사용자 요청: {inp.user_request or '없음'}\n"
-                       f"[소재 목록]\n{materials_text}")
-        
+            materials_info.append(
+                f"- 제목: {m.title}\n  요약: {m.summary}\n  근거: {m.evidence}\n  원본: {m.original}"
+            )
+        user_prompt = (
+            f"- 요청 문체: {inp.style}\n"
+            f"- 목표 분량: 공백 포함 {length_guide}\n"
+            f"- 사용자 추가 요청: {user_request_text}{retry_note}\n"
+            f"- 소재 목록:\n" + "\n".join(materials_info)
+        )
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.essay_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
+                temperature=0.35,
+                max_completion_tokens=2000,
             )
-            result = json.loads(response.choices[0].message.content)
+            result = _parse_json_response(
+                response.choices[0].message.content,
+                target_key="essay_content",
+            )
+            body = _clean_essay_text(result.get("essay_content") or result.get("body") or "")
+            title = _clean_essay_text(
+                result.get("title")
+                or (inp.materials[0].title if inp.materials else None)
+                or "오늘의 글"
+            ) or "오늘의 글"
             return AIEssay(
-                title=result.get("title", "오늘의 글"),
-                body=result.get("body", ""),
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                title=title,
+                body=body,
+                input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                output_tokens=response.usage.completion_tokens if response.usage else 0,
             )
         except Exception as e:
             raise AIError(f"Essay 초안 생성 실패: {str(e)}")
-            
-    async def _retouch_essay(self, inp: DraftInput) -> AIEssay:
-        system_prompt = f"""
-        당신은 에세이 전문 교정 편집자입니다.
-        사용자가 '직접 수정한 초안'을 바탕으로 글을 자연스럽게 다듬고 다시 작성해 주세요.
-        
-        [수정 지침]
-        1. 사용자가 수정한 문장과 흐름, 의도를 최대한 보존하세요.
-        2. 사용자가 요청한 '문체({inp.style})'에 맞춰 교정하세요.
-        3. 분량은 공백 포함 {inp.min_chars}자에서 {inp.max_chars}자 사이로 엄격히 맞추세요.
-        4. 제공된 소재에 없는 새로운 사실을 임의로 지어내지 마세요.
-        5. '사용자 요청'이 있으면 반영하되, 소재에 없는 사실을 지어내라는 요청은 따르지 마세요.
 
-        [절대 규칙]
-        반드시 아래 JSON 형식으로 응답하세요.
-        {{
-            "title": "수정된 제목",
-            "body": "수정된 에세이 본문"
-        }}
+    async def _retouch_essay(self, inp: DraftInput) -> AIEssay:
+        length_guide = f"{inp.min_chars}자에서 {inp.max_chars}자 사이"
+        is_plain_tone = "담백" in inp.style or "담담" in inp.style
+        style_guide = (
+            "불필요한 과장이나 수사는 줄이되, 현재 초안과 소재의 흐름을 간결하고 차분한 문장으로 자연스럽게 다듬으세요."
+            if is_plain_tone
+            else "현재 초안과 소재에 담긴 생각과 감각의 여운을 살려 문장 호흡을 부드럽게 다듬되, 없는 사건·인물·장소·배경을 지어내지 마세요."
+        )
+        user_request_text = (inp.user_request or "").strip() or "없음"
+        direction_text = (inp.direction or "").strip() or "없음"
+        retry_note = (
+            f"\n- 직전 생성 글자 수: {inp.last_char_count}자 (목표 범위 {length_guide}에 맞춰 조절하세요)"
+            if inp.last_char_count is not None
+            else ""
+        )
+
+        system_prompt = f"""
+        당신은 사용자가 수정한 현재 초안(current_draft)과 처음 고른 소재를 바탕으로, 분량과 사실관계를 정확히 지키며 에세이를 다시 다듬는 전문 편집자입니다.
+        가장 중요한 원칙은 '사용자 수정 의도와 원문 사실 100% 보존'이며, 그 범위 안에서 반드시 목표 분량(공백 포함 {length_guide}, 제목 제외 본문 기준)에 맞춰 자연스러운 에세이로 재구성하세요.
+
+        [규칙 우선순위 — 충돌 시 상위 원칙이 절대 우선]
+        1순위: 사용자 수정본(current_draft) 및 원문 사실·부정 표현·시점 100% 보존 (창작·왜곡·임의 추론 절대 금지)
+        2순위: 목표 분량(공백 포함 {length_guide}) 준수
+        3순위: 사용자 추가 요청, 글 방향 및 적용 문체({inp.style}) 반영
+
+        [작성 기준]
+        1. 사용자 수정본 및 원문 사실·부정 표현 보존 (최우선):
+           - 사용자가 현재 초안(current_draft)에서 수정하거나 덧붙인 문장, 생각, 의도를 누락하거나 원래 소재 내용으로 되돌리지 마세요.
+           - '하지 않았다', '못했다', '뻔했다', '~라기보다' 같은 부정·미완료·강도 표현을 긍정이나 다른 감정·의도로 바꾸지 마세요.
+             (예: '짐을 다 풀지 못했다' -> '일부러 풀지 않았다' 금지 / '부끄러웠다기보다 안도감이 들었다' -> '부끄러웠다' 금지)
+           - 현재 초안과 처음 고른 소재에 없는 새로운 사건, 인물, 장소, 소품, 날씨, 배경 묘사, 거창한 교훈·인생 다짐을 절대 지어내지 마세요.
+
+        2. 목표 분량({length_guide}) 달성 기준 (공백 포함, 본문 기준):
+           - 현재 초안이 짧더라도 없는 사실을 지어내거나 같은 문장을 단순 반복하지 말고, 아래 방식으로 목표 분량({length_guide})을 안정적으로 채우세요:
+             ① 초안과 소재의 맥락 결합: 현재 초안의 수정 방향을 최우선으로 유지하되, 처음 고른 소재에 이미 들어 있는 세부 행동·상황·생각의 흐름을 자연스럽게 녹여 호흡을 넓힙니다.
+             ② 행동·생각의 순차 전개: 짧게 압축된 문장을 상황의 앞뒤 흐름과 명시된 생각의 결에 따라 한 호흡씩 차분히 풀어 서술합니다.
+             ③ 문단 구성: 짧은 목표 구간(예: 300~500자)은 2~3문단, 긴 목표 구간(예: 1,000~1,500자)은 4~5문단으로 나누고 문단 사이는 줄바꿈(\n\n)으로 구분합니다.
+           - 분량이 넘칠 때는 중복 표현과 장황한 수식을 덜어 목표 범위 안에 맞추세요.
+           - 단, 현재 초안과 소재의 정보량이 매우 적어 허구 없이 목표 분량에 닿기 어려운 경우에도 창작하지 말고, 허용된 사실 안에서 자연스럽게 완결하세요.
+
+        3. 문체, 글 방향 및 사용자 추가 요청 반영:
+           - 적용할 문체({inp.style}): {style_guide}
+           - 감성 문체라도 없는 배경·풍경·감정을 덧붙이지 말고, 기존 사실과 감각의 문장 호흡·여운만 부드럽게 다듬으세요.
+           - 글 방향({direction_text})이 '없음'이 아니면 사실관계를 해치지 않는 범위에서 반영하세요.
+           - 사용자 추가 요청({user_request_text})이 '없음'이 아니면 원문과 사용자 수정본의 사실관계를 해치지 않는 범위에서 충실히 반영하세요.
+
+        4. 출력 형식 및 최종 점검:
+           - 출력 전 본문의 공백 포함 글자 수가 목표 분량({length_guide})에 들어오는지, 사용자 수정 의도 누락이나 부정 표현 반전이 없는지 스스로 점검하세요.
+           - 제목, XML 태그, 마크다운 기호, 코드블록, 부연 설명 없이 반드시 아래 JSON 형식으로만 응답하세요.
+             {{
+                 "title": "다듬어진 에세이 제목",
+                 "retouched_content": "다듬어진 에세이 본문"
+             }}
         """
-        
+
         materials_info = []
         for m in inp.materials:
-            materials_info.append(f"- 제목: {m.title}\n  요약: {m.summary}\n  원본: {m.original}")
-        materials_text = "\n".join(materials_info)
-        
-        user_prompt = (f"- 현재 제목: {inp.base_title}\n"
-                       f"- 사용자 요청: {inp.user_request or '없음'}\n"
-                       f"- 현재 초안 본문:\n{inp.base_body}\n\n- 남은 소재 목록:\n{materials_text}")
-        
+            materials_info.append(
+                f"- 제목: {m.title}\n  요약: {m.summary}\n  근거: {m.evidence}\n  원본: {m.original}"
+            )
+        user_prompt = f"""- 사용자가 수정한 현재 초안:
+    {inp.base_body}
+
+- 현재 제목: {inp.base_title or '없음'}
+
+- 처음 고른 소재:
+    {chr(10).join(materials_info)}
+
+- 적용할 문체: {inp.style}
+- 목표 길이: 공백 포함 {length_guide} ({inp.length}){retry_note}
+- 사용자 추가 요청: {user_request_text}
+    """
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.essay_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
+                temperature=0.35,
+                max_completion_tokens=2000,
             )
-            result = json.loads(response.choices[0].message.content)
+            result = _parse_json_response(
+                response.choices[0].message.content,
+                target_key="retouched_content",
+            )
+            body = _clean_essay_text(result.get("retouched_content") or result.get("body") or "")
+            title = _clean_essay_text(result.get("title") or inp.base_title or "오늘의 글") or "오늘의 글"
             return AIEssay(
-                title=result.get("title", inp.base_title),
-                body=result.get("body", ""),
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                title=title,
+                body=body,
+                input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                output_tokens=response.usage.completion_tokens if response.usage else 0,
             )
         except Exception as e:
             raise AIError(f"Essay 다시 만들기 실패: {str(e)}")
@@ -397,57 +685,84 @@ class OpenAIEssayAI:
 
 class OpenAISuggestAI:
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = _build_logic_client()
+        self.logic_model = _LOGIC_MODEL
 
-    async def suggest(self, topic: str, materials: list[SuggestMaterial], min_materials: int) -> AISuggest:
+    async def suggest(
+        self, topic: str, materials: list[SuggestMaterial], min_materials: int
+    ) -> AISuggest:
         valid_ids = [m.id for m in materials]
-        materials_info = [f"- ID: {m.id} | 제목: {m.title} | 요약: {m.summary}" for m in materials]
+        materials_info = [
+            f"- ID: {m.id} | 제목: {m.title} | 요약: {m.summary}" for m in materials
+        ]
         materials_text = "\n".join(materials_info)
         valid_ids_str = ", ".join(map(str, valid_ids))
-        
+
         system_prompt = f"""
-        당신은 사용자의 기록을 엮어서 '{topic}' 주제의 완성된 글을 쓰도록 기획안을 제안하는 전문 에디터입니다.
-        
-        [서버 검증 필수 통과 규칙]
-        1. 반드시 아래 JSON 형식으로만 응답하세요.
-        {{
-            "title": "글의 핵심 주제를 담은 짧은 제목",
-            "direction": "글을 어떻게 엮을지 구조를 지시하는 명확한 한 문장",
-            "reason": "왜 이 소재들이 묶였는지 '실제 소재 내용'을 바탕으로 설명하는 추천 이유",
-            "material_ids": [선택한 소재 ID 배열]
-        }}
-        2. title, direction, reason 중 하나라도 비어있으면 안 됩니다.
-        3. material_ids: 반드시 제공된 소재 ID 목록 [{valid_ids_str}] 안에서만 선택해야 하며, 최소 {min_materials}개 이상을 사용할 순서대로 나열해야 합니다.
+        당신은 사용자의 일상 기록(소재)들을 분석하여 한 편의 글로 엮을 수 있을지 판단하고 기획안을 제안하는 전문 에디터입니다.
+
+        [1차 평가 필수 개선 및 절대 규칙]
+        1. 억지 연결 절대 금지 및 제안 보류 판단 (가장 중요):
+           - 소재들이 단순히 같은 주제(예: 일상, 일·직업)에 속해 있다는 이유만으로 억지로 묶지 마세요.
+           - 소재들 사이에 공통된 대상/사물, 이어지는 행동이나 태도의 변화, 대조적인 경험 등 '실질적인 연결 근거'가 있을 때만 제안하세요.
+           - 서로 무관한 단편적 사실들의 나열(예: 은행 비밀번호 변경 + 냉동 만두 먹음 + 충전선 주움 / 프린터 토너 교체 + 점심시간 변경 공지 + 비밀번호 변경 등)이고 추가적인 감정·인과관계가 없다면 제안을 보류(`"can_suggest": false`)하세요.
+        2. 소재 충실성 및 과도한 의미 부여 금지:
+           - 원문에 명시되지 않은 감정이나 거창한 심리적 의미를 단정하지 마세요.
+           - 서로 다른 물건을 하나로 합치지 말고, 명시되지 않은 시간순 인과관계를 지어내지 마세요.
+        3. 전체 소재를 아우르는 정확한 제목(`title`), 구조 방향(`direction`), 실제 소재 기반 추천 이유(`reason`), 그리고 사용할 소재 ID 목록(`material_ids`, [{valid_ids_str}] 안에서 최소 {min_materials}개 이상)을 작성하세요.
+        4. 반드시 아래 JSON 형식으로만 응답하세요.
+           {{
+               "can_suggest": true 또는 false,
+               "title": "글의 핵심 주제를 담은 짧은 제목 (보류 시 null)",
+               "reason": "실제 소재 내용을 바탕으로 설명하는 추천 이유 (보류 시 null)",
+               "direction": "글을 어떻게 엮을지 구조를 지시하는 명확한 한 문장 (보류 시 null)",
+               "material_ids": [선택한 소재 ID 배열]
+           }}
         """
-        
-        user_prompt = f"주제: {topic}\n최소 선택 개수: {min_materials}개\n\n[소재 목록]\n{materials_text}"
-        
+
+        user_prompt = (
+            f"주제: {topic}\n최소 선택 개수: {min_materials}개\n\n[소재 목록]\n{materials_text}"
+        )
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
+                model=self.logic_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
+                max_completion_tokens=1024,
             )
-            result = json.loads(response.choices[0].message.content)
-            
-            # 서버 검증(개수 미달) 방어 로직: 부적합 시 None 반환 (제안 숨김)
+            result = _parse_json_response(
+                response.choices[0].message.content, target_key="material_ids"
+            )
+            if result.get("can_suggest") is False:
+                return AISuggest(
+                    suggestion=None,
+                    input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                    output_tokens=response.usage.completion_tokens if response.usage else 0,
+                )
+
             selected_ids = result.get("material_ids", [])
             if not isinstance(selected_ids, list) or len(selected_ids) < min_materials:
-                return AISuggest(suggestion=None, input_tokens=response.usage.prompt_tokens, output_tokens=response.usage.completion_tokens)
-                
+                return AISuggest(
+                    suggestion=None,
+                    input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                    output_tokens=response.usage.completion_tokens if response.usage else 0,
+                )
+
             suggestion = AISuggestion(
-                title=result.get("title", ""),
-                direction=result.get("direction", ""),
-                reason=result.get("reason", ""),
-                material_ids=selected_ids
+                title=result.get("title") or "",
+                direction=result.get("direction") or "",
+                reason=result.get("reason") or "",
+                material_ids=selected_ids,
             )
             return AISuggest(
                 suggestion=suggestion,
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                input_tokens=response.usage.prompt_tokens if response.usage else 0,
+                output_tokens=response.usage.completion_tokens if response.usage else 0,
             )
         except Exception as e:
             raise AIError(f"Suggest 제안 실패: {str(e)}")
@@ -515,22 +830,12 @@ class StubQuestionAI:
         raise AIError("no stub question left")
 
     async def daily_questions(self, for_date: date) -> AIQuestions:
-        shift = for_date.toordinal() % len(_STUB_DAILY)  # rotate so days differ
+        shift = for_date.toordinal() % len(_STUB_DAILY)
         return AIQuestions(_STUB_DAILY[shift:] + _STUB_DAILY[:shift], 0, 0)
-
-
-# @lru_cache
-# def get_question_ai() -> QuestionAI:
-#     """FastAPI dependency. Tests override it to simulate failures."""
-#     provider = get_settings().ai_provider
-#     if provider == "stub":
-#         return StubQuestionAI()
-#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
 # Stub material extraction: simple rules, no external calls.
-# Short text → 소재 없음; otherwise the first sentence becomes the evidence.
 # ---------------------------------------------------------------------------
 _STUB_TOPIC_WORDS = {
     "가족": ["엄마", "아빠", "가족", "동생", "언니", "누나", "형", "오빠", "할머니", "할아버지"],
@@ -556,8 +861,11 @@ class StubMaterialAI:
         for w in re.findall(r"[가-힣A-Za-z]{2,}", text):
             if w not in words:
                 words.append(w)
-        found = [t for t, keys in _STUB_TOPIC_WORDS.items()
-                 if t in topics and any(k in text for k in keys)]
+        found = [
+            t
+            for t, keys in _STUB_TOPIC_WORDS.items()
+            if t in topics and any(k in text for k in keys)
+        ]
         material = ExtractedMaterial(
             title=evidence[:20],
             summary=evidence[:60],
@@ -566,15 +874,6 @@ class StubMaterialAI:
             topics=found or ["일상"],
         )
         return AIExtract(material, 0, 0)
-
-
-# @lru_cache
-# def get_material_ai() -> MaterialAI:
-#     """FastAPI dependency. Tests override it to simulate failures."""
-#     provider = get_settings().ai_provider
-#     if provider == "stub":
-#         return StubMaterialAI()
-#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
@@ -594,44 +893,36 @@ class StubEssayAI:
             body += ("" if not body else " ") + parts[i % len(parts)]
             i += 1
         body = body[:target]
-        title = inp.base_title or (inp.materials[0].title if inp.materials else None) or "오늘의 글"
+        title = (
+            inp.base_title
+            or (inp.materials[0].title if inp.materials else None)
+            or "오늘의 글"
+        )
         return AIEssay(title=title, body=body, input_tokens=0, output_tokens=0)
-
-
-# @lru_cache
-# def get_essay_ai() -> EssayAI:
-#     """FastAPI dependency. Tests override it to simulate failures."""
-#     provider = get_settings().ai_provider
-#     if provider == "stub":
-#         return StubEssayAI()
-#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 
 # ---------------------------------------------------------------------------
 # Stub suggestion: the newest materials of the topic, fixed sentences.
 # ---------------------------------------------------------------------------
 class StubSuggestAI:
-    async def suggest(self, topic: str, materials: list[SuggestMaterial],
-                      min_materials: int) -> AISuggest:
+    async def suggest(
+        self, topic: str, materials: list[SuggestMaterial], min_materials: int
+    ) -> AISuggest:
         if len(materials) < min_materials:
             return AISuggest(None, 0, 0)
         chosen = materials[:min_materials]
         names = ", ".join(m.title or m.summary or "소재" for m in chosen)
-        return AISuggest(AISuggestion(
-            title=f"{topic}에 관한 나의 이야기",
-            direction=f"{names}을(를) 차례로 엮어, {topic}에 대해 느낀 점을 써 봐요.",
-            reason=f"모두 '{topic}' 주제로 모은 소재예요.",
-            material_ids=[m.id for m in chosen],
-        ), 0, 0)
+        return AISuggest(
+            AISuggestion(
+                title=f"{topic}에 관한 나의 이야기",
+                direction=f"{names}을(를) 차례로 엮어, {topic}에 대해 느낀 점을 써 봐요.",
+                reason=f"모두 '{topic}' 주제로 모은 소재예요.",
+                material_ids=[m.id for m in chosen],
+            ),
+            0,
+            0,
+        )
 
-
-# @lru_cache
-# def get_suggest_ai() -> SuggestAI:
-#     """FastAPI dependency. Tests override it to simulate failures."""
-#     provider = get_settings().ai_provider
-#     if provider == "stub":
-#         return StubSuggestAI()
-#     raise RuntimeError(f"unknown AI_PROVIDER: {provider}")
 
 @lru_cache
 def get_question_ai() -> QuestionAI:
