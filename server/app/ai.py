@@ -36,6 +36,7 @@ R30 SuggestAI
 import asyncio
 import json
 import os
+import random
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -625,7 +626,7 @@ class OpenAIEssayAI:
         3. 문체, 글 방향 및 사용자 추가 요청 반영:
            - 적용할 문체({inp.style}): {style_guide}
            - 감성 문체라도 없는 배경·풍경·감정을 덧붙이지 말고, 기존 사실과 감각의 문장 호흡·여운만 부드럽게 다듬으세요.
-           - 글 방향({direction_text})이 '없음'이 아니면 사실관계를 해치지 않는 범위에서 반영하세요.
+            - 중요: 보존해야 할 대상은 '사실관계·부정 표현·사용자의 의도'이지, 기존 문장 표현 자체가 아닙니다. 문체나 조건이 주어졌다면 현재 초안(current_draft)과 제목을 그대로 복사해 반환하지 말고, 요청된 문체({inp.style})가 분명히 드러나도록 문장 구조와 어조를 새롭게 다듬어 작성하세요.
            - 사용자 추가 요청({user_request_text})이 '없음'이 아니면 원문과 사용자 수정본의 사실관계를 해치지 않는 범위에서 충실히 반영하세요.
 
         4. 출력 형식 및 최종 점검:
@@ -664,7 +665,7 @@ class OpenAIEssayAI:
                     {"role": "user", "content": user_prompt},
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.35,
+                temperature=0.6,
                 max_completion_tokens=2000,
             )
             result = _parse_json_response(
