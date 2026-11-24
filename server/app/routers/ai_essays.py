@@ -252,7 +252,8 @@ async def first_draft(data: FirstDraftIn, user: User, ai: AI, response: Response
             "insert into ai_requests (user_id, kind, target_type, target_id) "
             "values (auth.uid(), 'draft', 'essay', %s) returning id", (essay_id,))).fetchone()
 
-    inp = _draft_input(materials, data.direction or None, data.style, data.length,
+    # 팀 결정 11/25: 글의 방향은 AI에 넘기지 않는다 (요청사항만 선택으로)
+    inp = _draft_input(materials, None, data.style, data.length,
                        user_request=data.request or None)
     out, used, tokens_in, tokens_out = await _run(user, req["id"], ai, inp)
 
@@ -358,7 +359,7 @@ async def regenerate(essay_id: UUID, data: RegenerateIn, user: User, ai: AI) -> 
             "insert into ai_requests (user_id, kind, target_type, target_id) "
             "values (auth.uid(), 'regen', 'essay', %s) returning id", (essay_id,))).fetchone()
 
-    inp = _draft_input(materials, essay["direction"], data.style, data.length,
+    inp = _draft_input(materials, None, data.style, data.length,
                        base_title=base_title, base_body=base_body,
                        user_request=essay["request"])
     out, used, tokens_in, tokens_out = await _run(user, req["id"], ai, inp)
