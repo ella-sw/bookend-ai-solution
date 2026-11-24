@@ -38,7 +38,7 @@ class Suggestion(BaseModel):
     id: UUID
     topic: Topic
     title: str
-    direction: str
+    direction: str | None  # 팀 결정 11/25: 화면에 쓰지 않음 (AI가 주면 남겨 둘 뿐)
     reason: str
     materials: list[SuggestionMaterial]  # 사용할 소재, 순서대로
     computed_at: datetime
