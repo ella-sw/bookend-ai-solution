@@ -490,9 +490,9 @@ class OpenAIEssayAI:
         length_guide = f"{inp.min_chars}자에서 {inp.max_chars}자 사이"
         is_plain_tone = any(k in (inp.style or "").lower() for k in ("담백", "담담", "plain", "calm"))
         style_guide = (
-            "과도한 비유, 수식어, 극적인 감정 묘사를 배제하세요. 사건과 행동, 사용자가 실제로 한 생각만을 간결하고 절제된 문장으로 담백하게 서술하세요."
+            "문장을 짧고 간결하게 끊어 쓰세요. 여운을 남기는 감상 문장이나 부연 설명은 줄이고, 일어난 일과 행동, 생각의 핵심만 사실 위주로 건조하고 깔끔하게 적으세요. (예: '~했다. ~이었다.' 위주의 담백한 호흡)"
             if is_plain_tone
-            else "원문에 있는 감각(소리, 냄새, 풍경 등)과 여운을 부드럽고 풍부한 문장 호흡으로 묘사하세요. 단, 감성적인 분위기를 내기 위해 원문에 없는 사건·배경·감정·인물(이별, 친구, 특정 색깔의 물감, 가게 조명 등)을 절대 지어내지 마세요."
+            else "원문에 이미 등장한 감각·상황·생각의 결을 길고 부드러운 호흡으로 풀어내세요. 사건·인물·배경은 새로 지어내지 않되, 그 순간의 분위기와 마음의 여운이 천천히 스며들도록 서정적이고 이어지는 문장으로 다듬으세요."
         )
         user_request_text = (inp.user_request or "").strip() or "없음"
         direction_text = (inp.direction or "").strip() or "없음"
@@ -572,9 +572,9 @@ class OpenAIEssayAI:
         length_guide = f"{inp.min_chars}자에서 {inp.max_chars}자 사이"
         is_plain_tone = any(k in (inp.style or "").lower() for k in ("담백", "담담", "plain", "calm"))
         style_guide = (
-            "비유와 감정 과장을 덜어내고, 사건과 행동을 중심으로 간결하고 절제된 담백한 문체로 다듬으세요."
+            "문장을 짧고 간결하게 끊어 쓰세요. 여운을 남기는 감상 문장이나 부연 설명은 줄이고, 일어난 일과 행동, 생각의 핵심만 사실 위주로 건조하고 깔끔하게 적으세요. (예: '~했다. ~이었다.' 위주의 담백한 호흡)"
             if is_plain_tone
-            else "원문의 사실과 감정을 그대로 유지하면서, 감각적인 묘사와 부드러운 문장 호흡을 살려 감성적인 분위기가 자연스럽게 드러나도록 다듬으세요."
+            else "원문에 이미 등장한 감각·상황·생각의 결을 길고 부드러운 호흡으로 풀어내세요. 사건·인물·배경은 새로 지어내지 않되, 그 순간의 분위기와 마음의 여운이 천천히 스며들도록 서정적이고 이어지는 문장으로 다듬으세요."
         )
         user_request_text = (inp.user_request or "").strip() or "없음"
         direction_line = (
