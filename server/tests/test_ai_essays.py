@@ -90,7 +90,8 @@ def test_first_draft_is_kept_as_version_zero(client, make_user, owner):
 
     gi = owner.execute("select generation_input from essay_versions where essay_id = %s",
                        (e["id"],)).fetchone()["generation_input"]
-    assert [x["id"] for x in gi["materials"]] == [m2, m1] and gi["direction"]
+    assert [x["id"] for x in gi["materials"]] == [m2, m1]
+    assert gi["direction"] is None and sent.direction is None  # 글의 방향은 AI에 안 넘김 (11/25)
     # 초안 자동 보관은 '사용자 글 저장'이 아님 (R33)
     assert count(owner, "select count(*) n from events where user_id = %s "
                         "and name = 'essay_saved'", a) == 0
@@ -334,7 +335,7 @@ def test_user_request_is_saved_and_sent_on_draft_and_regenerate(client, make_use
     e = r.json()
     assert e["request"] == "엄마에게 쓰는 편지처럼" and e["direction"] == "가족의 마음"
     assert ai.inputs[-1].user_request == "엄마에게 쓰는 편지처럼"
-    assert ai.inputs[-1].direction == "가족의 마음"  # direction과 따로 간다
+    assert ai.inputs[-1].direction is None  # 글의 방향은 AI에 넘기지 않음 (팀 결정 11/25)
     gen = owner.execute("select generation_input from essay_versions where essay_id = %s",
                         (e["id"],)).fetchone()["generation_input"]
     assert gen["user_request"] == "엄마에게 쓰는 편지처럼"  # 보낸 그대로 보관 (ERD 11)

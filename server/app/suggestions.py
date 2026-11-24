@@ -138,8 +138,9 @@ async def _recompute(user_id: UUID, topic_id: int, ai: SuggestAI) -> None:
         s = out.suggestion
         if s is not None:
             ids = list(dict.fromkeys(s.material_ids))
-            if not (s.title.strip() and s.direction.strip() and s.reason.strip()):
-                raise AIError("invalid_result: empty title, direction or reason")
+            # 팀 결정 11/25: 글의 방향(direction)은 보여 주지 않는다 → 제목·이유만 필수
+            if not (s.title.strip() and s.reason.strip()):
+                raise AIError("invalid_result: empty title or reason")
             if not set(ids) <= sent or len(ids) < min_n:
                 raise AIError(f"invalid_result: needs {min_n}+ materials from the given list")
     except Exception as e:  # noqa: BLE001 - any failure → failed, retried on the next change
@@ -180,7 +181,7 @@ async def _recompute(user_id: UUID, topic_id: int, ai: SuggestAI) -> None:
         await conn.execute(
             "update suggestions set status = 'ready', title = %s, direction = %s, reason = %s, "
             "computed_at = now() where id = %s",
-            (s.title.strip(), s.direction.strip(), s.reason.strip(), sug_id))
+            (s.title.strip(), (s.direction or "").strip() or None, s.reason.strip(), sug_id))
         await conn.execute("delete from suggestion_materials where suggestion_id = %s",
                            (sug_id,))
         await conn.execute(
