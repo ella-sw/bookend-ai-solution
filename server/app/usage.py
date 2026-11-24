@@ -9,7 +9,8 @@ Not counted: the 30 shared daily questions (made once a day for everyone) and su
 recomputes (started by the server, not the user; R30).
 
 The limit is the AI_DAILY_LIMIT setting (provisional until the team decides it from C's
-measurements, 정할 것 1번).
+measurements, 정할 것 1번). The demo accounts listed in DEMO_USER_IDS (rec, guest; shared by
+the judges) use AI_DAILY_LIMIT_DEMO instead.
 """
 
 from psycopg import AsyncConnection
@@ -33,19 +34,19 @@ async def take_ai_call(conn: AsyncConnection) -> None:
         f"""
         insert into ai_usage (user_id, day, calls) values (auth.uid(), {KST_TODAY}, 1)
         on conflict (user_id, day) do update set calls = ai_usage.calls + 1
-        returning calls
+        returning user_id, calls
         """
     )).fetchone()
-    if row["calls"] > get_settings().ai_daily_limit:
+    if row["calls"] > get_settings().daily_limit_for(row["user_id"]):
         raise DailyLimitError
 
 
 async def usage_today(conn: AsyncConnection) -> dict:
     """{'ai_calls_today': n, 'ai_daily_limit': limit, 'daily_limit_reached': bool}"""
     row = await (await conn.execute(
-        f"select coalesce((select calls from ai_usage where user_id = auth.uid() "
-        f"and day = {KST_TODAY}), 0) as calls"
+        f"select auth.uid() as user_id, coalesce((select calls from ai_usage "
+        f"where user_id = auth.uid() and day = {KST_TODAY}), 0) as calls"
     )).fetchone()
-    limit = get_settings().ai_daily_limit
+    limit = get_settings().daily_limit_for(row["user_id"])
     return {"ai_calls_today": row["calls"], "ai_daily_limit": limit,
             "daily_limit_reached": row["calls"] >= limit}

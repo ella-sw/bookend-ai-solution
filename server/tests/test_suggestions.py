@@ -168,3 +168,69 @@ def test_clear_all_removes_suggestions(client, make_user, owner):
         material(client, a, t)
     client.delete("/me/data", headers=auth(a))
     assert row(owner, a) is None
+
+
+# 글에 쓴 소재는 제안 후보에서 빠진다 (저장한 글만; 임시 저장은 그대로)
+def write_essay(client, uid, ids, how):
+    from tests.test_ai_essays import draft
+    from tests.test_essays import first_save
+    res = draft(client, uid, ids) if how == "ai" else first_save(client, uid, material_ids=ids)
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+@pytest.mark.parametrize("how", ["ai", "direct"])
+def test_materials_used_in_a_saved_essay_leave_the_suggestion(client, make_user, owner, how):
+    a = make_user()
+    use_ai(CountingAI())
+    ids = [material(client, a, t) for t in ("하나", "둘", "셋")]
+    assert listing(client, a)["suggestions"]  # 쓰기 전에는 카드가 있다
+    write_essay(client, a, ids, how)
+    assert row(owner, a) is None and listing(client, a)["suggestions"] == []
+    # 새 소재가 들어와도 글에 안 쓴 소재가 3개가 될 때까지는 제안 없음
+    material(client, a, "넷")
+    assert row(owner, a) is None
+
+
+def test_unused_materials_still_make_a_suggestion(client, make_user, owner):
+    a = make_user()
+    ai = use_ai(CountingAI())
+    ids = [material(client, a, t) for t in ("하나", "둘", "셋", "넷")]
+    write_essay(client, a, ids[:1], "direct")
+    (s,) = listing(client, a)["suggestions"]
+    assert {m["title"] for m in s["materials"]} == {"둘", "셋", "넷"}
+    assert set(ai.calls[-1][1]) == {str(i) for i in ids[1:]}
+
+
+def test_draft_essay_does_not_hide_materials(client, make_user, owner):
+    a = make_user()
+    use_ai(CountingAI())
+    ids = [material(client, a, t) for t in ("하나", "둘", "셋")]
+    res = client.post("/essays/draft", headers=auth(a),
+                      json={"title": "임시", "body": "쓰는 중", "material_ids": ids})
+    assert res.status_code == 200, res.text
+    assert row(owner, a)["status"] == "ready"
+
+
+def test_deleting_the_essay_brings_the_materials_back(client, make_user, owner):
+    a = make_user()
+    use_ai(CountingAI())
+    ids = [material(client, a, t) for t in ("하나", "둘", "셋")]
+    essay_id = write_essay(client, a, ids, "direct")
+    assert row(owner, a) is None
+    assert client.delete(f"/essays/{essay_id}", headers=auth(a)).status_code == 204
+    (s,) = listing(client, a)["suggestions"]
+    assert {m["title"] for m in s["materials"]} == {"하나", "둘", "셋"}
+
+
+def test_material_in_another_essay_still_counts_once_that_one_is_deleted(client, make_user,
+                                                                          owner):
+    a = make_user()
+    use_ai(CountingAI())
+    ids = [material(client, a, t) for t in ("하나", "둘", "셋")]
+    first = write_essay(client, a, ids[:1], "direct")
+    second = write_essay(client, a, ids[:1], "direct")
+    client.delete(f"/essays/{first}", headers=auth(a))
+    assert row(owner, a) is None  # 아직 다른 글에 쓰여 있음
+    client.delete(f"/essays/{second}", headers=auth(a))
+    assert row(owner, a)["status"] == "ready"

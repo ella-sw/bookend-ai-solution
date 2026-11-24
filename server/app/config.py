@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     ai_suggest_timeout_seconds: float = 55
     # R32: AI calls per user per day (KST). Provisional until the team decides (정할 것 1번).
     ai_daily_limit: int = 50
+    # 시연 계정 (rec, guest): 심사위원 여러 명이 한 계정을 같이 쓰므로 한도를 따로 둔다.
+    # Supabase Authentication > Users의 User UID를 쉼표로 이어 쓴다.
+    demo_user_ids: str = ""
+    ai_daily_limit_demo: int = 500
+
+    @property
+    def demo_user_id_set(self) -> set[str]:
+        return {u.strip().lower() for u in self.demo_user_ids.split(",") if u.strip()}
+
+    def daily_limit_for(self, user_id: object) -> int:
+        """R32 limit for this user: demo accounts get ai_daily_limit_demo."""
+        if str(user_id).lower() in self.demo_user_id_set:
+            return self.ai_daily_limit_demo
+        return self.ai_daily_limit
 
     @property
     def cors_origin_list(self) -> list[str]:
