@@ -1297,7 +1297,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     Object.assign(essay, {
       title: input.title,
       draft_body: input.body,
-      direction: input.direction,
+      direction: null, // 서버와 같게 저장하지 않음 (11/24)
       suggestion_id: input.suggestion_id,
       material_ids: input.material_ids,
       updated_at: t,
@@ -1329,7 +1329,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       status: "saved",
       title: input.title,
       draft_body: null,
-      direction: input.direction,
+      direction: null, // 서버와 같게 저장하지 않음 (11/24)
       suggestion_id: input.suggestion_id,
       material_ids: input.material_ids,
       updated_at: t,
@@ -1353,8 +1353,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
     const ids = Array.from(new Set(Array.isArray(input.material_ids) ? input.material_ids : []));
     if (ids.length < 1 || ids.length > ESSAY_RULES.materialsMax) fail("bad_request");
     const { style, length } = checkStyleLength(input);
-    const direction = typeof input.direction === "string" ? input.direction.trim() || null : null;
-    if (direction && Array.from(direction).length > ESSAY_RULES.directionMax) fail("bad_request");
+    // direction은 서버처럼 무시한다 (11/24)
     // B UserRequest: 앞뒤 공백 제거, 비면 null, 코드 포인트 200자 넘으면 422
     const userRequest = typeof input.request === "string" ? input.request.trim() || null : null;
     if (userRequest && Array.from(userRequest).length > ESSAY_RULES.requestMax) fail("bad_request");
@@ -1376,7 +1375,7 @@ const handlers: Record<MockKey, (ctx: Ctx) => unknown> = {
       status: "saved",
       title: out.title,
       draft_body: null,
-      direction,
+      direction: null,
       request: userRequest,
       suggestion_id: input.suggestion_id ?? null,
       material_ids: ids,

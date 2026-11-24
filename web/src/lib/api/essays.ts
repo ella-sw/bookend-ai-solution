@@ -59,7 +59,7 @@ export function getEssay(essayId: string) {
 /**
  * [초안 만들기]: AI 초안을 만들어 '초안'(version 0)으로 보관하고 글을 돌려준다 → W330.
  * 201, 같은 save_token이면 200 + 이미 만든 글 (AI를 다시 부르지 않음).
- * direction(추천 흐름)·request(사용자 요청사항, 200자)는 따로 보내고 글에 저장된다 (다시 만들기에는 보내지 않음).
+ * request(사용자 요청사항, 200자)는 글에 저장된다 (다시 만들기에는 보내지 않음).
  * 오류: 422 material_not_available, 404 suggestion_not_found, 429 daily_limit, 502 ai_failed
  */
 export function createAiDraft(input: CreateAiDraftInput) {

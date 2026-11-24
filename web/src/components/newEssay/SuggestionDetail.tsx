@@ -12,7 +12,7 @@ import { useOnboardingRedirect } from "@/lib/useOnboardingRedirect";
 
 /**
  * N130 글쓰기 제안 상세 (UI 설계서 v7 18쪽, 목록 20·24번, B GET /suggestions/{id})
- * - 주제·제목·글의 방향·추천 이유·사용할 소재(순서대로 → M130)
+ * - 주제·제목·추천 이유·사용할 소재(순서대로 → M130)
  * - 화면에 보이면 1번 suggestion_shown(placement = suggestion_detail)
  * - [소재 바꾸기] → N110 (제안 소재가 선택된 채) / [이 주제로 글쓰기] → suggestion_selected 1번 → N120
  * - [닫기] → 뒤로 (없으면 홈). 제안·소재는 건드리지 않음
@@ -126,11 +126,6 @@ function SuggestionDetail({ suggestionId, query }: { suggestionId: string; query
             <Tag tone="primary">{suggestion.topic.name}</Tag>
           </div>
           <h1 className="text-xl font-bold leading-snug">{suggestion.title}</h1>
-        </section>
-
-        <section className="flex flex-col gap-1.5">
-          <h2 className="text-sm font-semibold text-ink-soft">글의 방향</h2>
-          <p className="text-[15px] leading-relaxed">{suggestion.direction}</p>
         </section>
 
         <section className="flex flex-col gap-1.5">

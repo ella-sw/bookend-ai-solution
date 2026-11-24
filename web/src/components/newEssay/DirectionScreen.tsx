@@ -12,7 +12,7 @@ import { useDirectStart } from "./useDirectStart";
 import { moveEssayRequest } from "@/lib/essayRequestStore";
 
 /**
- * N120 고른 소재: 소재 확인·빼기·추가만. 추천 흐름·요청사항은 AI 초안 3단계(요청)에서 (목록 20번 변경)
+ * N120 고른 소재: 소재 확인·빼기·추가만. 요청사항은 AI 초안 3단계(요청)에서 (목록 20번 변경)
  * - 고른 소재: 고른 순서대로, ×로 빼기
  * - [+ 소재 추가] → '소재 추가' 시트 (목록 4번, N110으로 넘어가지 않음): 불러온 소재 중 고르지 않은 것.
  *   여러 개 체크 → [추가 (n)] → 체크한 순서대로 m 뒤에 붙인다. 최대 ESSAY_RULES.materialsMax개를 넘지 않게 막고 안내.
