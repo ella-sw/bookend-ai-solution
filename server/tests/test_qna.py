@@ -81,6 +81,28 @@ def test_daily_questions(client, make_user):
     assert again == first  # made once per day, shared
 
 
+def test_daily_questions_second_call_same_day(client, make_user):
+    """그날 질문이 이미 있으면 AI 없이 그대로 돌려준다 (다른 사용자, 여러 번 불러도 200)."""
+    a, b = make_user(), make_user()
+    made = client.get("/daily-questions/today", headers=auth(a))
+    for uid in (b, b, a):
+        r = client.get("/daily-questions/today", headers=auth(uid))
+        assert r.status_code == 200, r.text
+        assert r.json() == made.json()
+
+
+def test_daily_questions_used_one_goes_last(client, make_user):
+    """오늘 첫 질문으로 쓴 질문은 그 사용자 목록에서만 맨 뒤로 간다."""
+    a, b = make_user(), make_user()
+    used = first_q(client, a)
+    start(client, a)
+    mine = client.get("/daily-questions/today", headers=auth(a)).json()["questions"]
+    theirs = client.get("/daily-questions/today", headers=auth(b)).json()["questions"]
+    assert mine[-1]["id"] == used["id"]
+    assert [q["seq"] for q in mine] == list(range(2, 31)) + [1]
+    assert [q["seq"] for q in theirs] == list(range(1, 31))
+
+
 def test_daily_questions_need_token(client):
     assert client.get("/daily-questions/today").status_code == 401
 
