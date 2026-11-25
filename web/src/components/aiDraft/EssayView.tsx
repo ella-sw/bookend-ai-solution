@@ -28,7 +28,7 @@ export function EssayInfoLine({
       {parts.join(" · ")}
       <span>· {charCount.toLocaleString()}자</span>
       {inLengthRange === false && (
-        <span className="rounded-md bg-accent-soft px-1.5 py-0.5 text-xs text-[#843c0c]">목표 범위 밖</span>
+        <span className="rounded-md bg-accent-soft px-1.5 py-0.5 text-xs text-accent-ink">목표 범위 밖</span>
       )}
       {materialCount !== undefined && <span>· 소재 {materialCount}개</span>}
     </p>
@@ -39,7 +39,7 @@ export function EssayInfoLine({
 export function EssayText({ title, body }: { title: string | null; body: string }) {
   return (
     <article className="flex flex-col gap-4">
-      <h1 className="text-xl font-bold leading-snug">{title?.trim() || "(제목 없음)"}</h1>
+      <h1 className="font-serif text-[22px] font-semibold leading-snug">{title?.trim() || "(제목 없음)"}</h1>
       <p className="text-[16px] leading-loose whitespace-pre-wrap">{body}</p>
     </article>
   );

@@ -393,7 +393,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
               disabled={editing}
               onClick={() => setVersionId(v.id)}
               className={`h-8 shrink-0 rounded-full border px-3 text-[13px] disabled:opacity-50 ${
-                v.id === version.id ? "border-ink bg-ink font-semibold text-white" : "border-line text-ink-soft active:bg-subtle"
+                v.id === version.id ? "border-primary bg-primary font-semibold text-white" : "border-line text-ink-soft active:bg-subtle"
               }`}
             >
               {v.label}
@@ -447,7 +447,7 @@ function EssayDetail({ essayId }: { essayId: string }) {
         ) : (
           <>
             <article className="flex flex-col gap-3">
-              <h1 className="text-xl font-bold leading-snug">{version.title?.trim() || "(제목 없음)"}</h1>
+              <h1 className="font-serif text-[22px] font-semibold leading-snug">{version.title?.trim() || "(제목 없음)"}</h1>
               <p className="text-xs text-ink-mute">
                 {[version.style, version.length ? LENGTH_LABEL[version.length] : null, `${version.char_count.toLocaleString()}자`]
                   .filter(Boolean)

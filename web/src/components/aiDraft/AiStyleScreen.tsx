@@ -313,7 +313,7 @@ function AiStyle({ params, regen }: { params: NewEssayParams; regen: { essayId: 
 
   if (phase === "making") {
     return (
-      <div className="fixed inset-y-0 left-1/2 z-40 flex w-full max-w-(--app-max-width) -translate-x-1/2 flex-col items-center justify-center gap-4 bg-surface px-6 text-center" role="status" aria-live="polite">
+      <div className="fixed inset-y-0 left-1/2 z-40 flex w-full max-w-(--app-max-width) -translate-x-1/2 flex-col items-center justify-center gap-4 bg-page px-6 text-center" role="status" aria-live="polite">
         <Spinner className="size-9" />
         <div>
           <p className="text-[15px] font-semibold">{regenMode ? "다시 쓰고 있어요…" : "소재를 엮어 글을 쓰고 있어요…"}</p>

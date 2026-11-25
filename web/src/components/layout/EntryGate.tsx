@@ -59,7 +59,7 @@ export default function EntryGate({ children }: { children: React.ReactNode }) {
   if (state === "ready") return <>{children}</>;
 
   return (
-    <div className="fixed inset-y-0 left-1/2 z-40 flex w-full max-w-(--app-max-width) -translate-x-1/2 flex-col bg-surface">
+    <div className="fixed inset-y-0 left-1/2 z-40 flex w-full max-w-(--app-max-width) -translate-x-1/2 flex-col bg-page">
       {state === "checking" ? (
         <Loading fullScreen />
       ) : (
