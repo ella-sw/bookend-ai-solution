@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Rowflow ERD · 소재추가 v9</title>
+<style>
+  @page { size: A3 landscape; margin: 0; }
+  :root {
+    --ink: #222; --soft: #555; --mute: #8c8c8c; --line: #d9d9d9; --bg: #fff;
+    --c-user: #2f3b4c; --c-rec: #5b7a3a; --c-mat: #b8650f; --c-sug: #b8860b; --c-ess: #8a2c47; --c-sys: #555;
+    --new: #fff6d6; --pk: #a1121f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #e9e9e9; color: var(--ink); }
+  body { font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  .page { position: relative; width: 1587px; height: 1122px; margin: 16px auto; background: var(--bg); overflow: hidden; padding: 44px 52px 40px; }
+  @media print { html, body { background: #fff; } .page { margin: 0; page-break-after: always; break-after: page; } .page:last-child { page-break-after: auto; break-after: auto; } }
+  h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.5px; }
+  h2 { font-size: 22px; margin: 0 0 14px; }
+  .sub { font-size: 13px; color: var(--soft); margin: 0 0 6px; }
+  .foot { position: absolute; right: 52px; bottom: 18px; font-size: 11px; color: var(--mute); }
+  code, .mono { font-family: Consolas, "D2Coding", monospace; }
+
+  /* ---------- page 1 diagram ---------- */
+  #diagram { position: absolute; left: 0; top: 0; width: 1587px; height: 1122px; }
+  #wires { position: absolute; left: 0; top: 0; width: 1587px; height: 1122px; pointer-events: none; z-index: 0; }
+  #diagram { z-index: 1; }
+  .card { position: absolute; z-index: 1; width: 214px; background: #fff; border: 1px solid #bdbdbd; font-size: 11px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .card .hd { color: #fff; padding: 3px 6px; font-weight: 700; font-size: 12px; white-space: nowrap; }
+  .card .hd small { font-weight: 400; font-size: 10px; opacity: .9; margin-left: 4px; }
+  .card .row { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; height: 17px; padding: 0 5px; }
+  .card .row .k { color: var(--pk); font-size: 9.5px; }
+  .card .row .n { font-family: Consolas, monospace; font-size: 11px; white-space: nowrap; }
+  .card .row .t { color: var(--mute); font-size: 9.5px; padding-left: 4px; }
+  .card .row.pk .n { font-weight: 700; }
+  .card .row.new { background: var(--new); }
+  .card .row.unused .n { color: var(--mute); text-decoration: line-through; }
+  .legend { position: absolute; left: 52px; bottom: 40px; font-size: 12px; color: var(--soft); line-height: 1.7; }
+  .legend .sw { display: inline-block; width: 26px; height: 12px; vertical-align: -1px; margin-right: 4px; border: 1px solid #ccc; }
+
+  /* ---------- table definitions ---------- */
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 28px; align-items: start; }
+  .tbl { margin: 0 0 16px; break-inside: avoid; }
+  .tbl h3 { font-size: 16px; margin: 0 0 5px; padding-left: 8px; border-left: 5px solid var(--c); }
+  .tbl h3 small { font-weight: 400; font-size: 12px; color: var(--soft); margin-left: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid var(--line); padding: 3px 5px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; font-weight: 700; }
+  td:first-child { font-family: Consolas, monospace; }
+  td.key { color: var(--pk); white-space: nowrap; }
+  tr.new td { background: var(--new); }
+  tr.unused td { color: var(--mute); }
+
+  /* ---------- rules ---------- */
+  .rules { columns: 2; column-gap: 36px; font-size: 12px; line-height: 1.55; }
+  .rule { break-inside: avoid; margin: 0 0 9px; }
+  .rule b { display: block; font-size: 13px; margin-bottom: 1px; }
+  .rule .chg { background: var(--new); }
+  .box { border: 1px solid var(--line); background: #fafafa; padding: 10px 14px; font-size: 12px; line-height: 1.6; }
+  .ev { width: 100%; font-size: 11.5px; margin-top: 10px; }
+  .ev td:first-child { font-family: Consolas, monospace; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<!-- 1. 관계도 -->
+<section class="page" id="p1">
+  <h1>Rowflow ERD · 소재추가 v9</h1>
+  <p class="sub">2026.11.25 · 개발자 A · 개발자 B 서버 migration 0001~0010 기준 · Supabase(Postgres) · 테이블 15개 · 수정 대기 목록 7~65번 반영 · 실제 Supabase DB와 칼럼 대조 완료 (11/25)</p>
+  <p class="sub">★ = v9에 새로 들어간 칼럼 (migration 0010 <code>essays.request</code>). 회색 취소선 = 칼럼은 남아 있지만 쓰지 않음 (<code>direction</code>, 11/24 팀 결정). 선은 FK (부모 쪽 끝 = 막대, 자식 쪽 끝 = 갈래). users.id로 가는 선은 점선.</p>
+  <svg id="wires"></svg>
+  <div id="diagram"></div>
+  <div class="legend">
+    <span class="sw" style="background:var(--c-user)"></span>사용자 &nbsp;
+    <span class="sw" style="background:var(--c-rec)"></span>1단계 기록·문답 &nbsp;
+    <span class="sw" style="background:var(--c-mat)"></span>소재·주제 &nbsp;
+    <span class="sw" style="background:var(--c-sug)"></span>글쓰기 제안 &nbsp;
+    <span class="sw" style="background:var(--c-ess)"></span>2단계 글·버전 &nbsp;
+    <span class="sw" style="background:var(--c-sys)"></span>AI 요청·사용량·이벤트 &nbsp;
+    <span class="sw" style="background:var(--new)"></span>v9 신규 칼럼
+  </div>
+  <div class="foot">Rowflow ERD · 소재추가 v9 · 1/4</div>
+</section>
+
+<!-- 2. 테이블 정의 (1) -->
+<section class="page" id="p2">
+  <h2>테이블 정의</h2>
+  <div class="cols">
+    <div id="c1"></div><div id="c2"></div><div id="c3"></div>
+  </div>
+  <div class="foot">Rowflow ERD · 소재추가 v9 · 2/4</div>
+</section>
+
+<!-- 3. 테이블 정의 (2) + v9 변경 -->
+<section class="page" id="p3">
+  <h2>테이블 정의 (이어서)</h2>
+  <div class="cols">
+    <div id="c4"></div><div id="c5"></div>
+    <div>
+      <div class="tbl" style="--c:#b8860b">
+        <h3>v9에서 바뀐 것 <small>v8(11/19) 이후</small></h3>
+        <div class="box">
+          <b>칼럼</b><br>
+          · <code>essays.request</code> ★ 추가: 사용자 요청사항 (선택, 200자). AI 초안 때 저장하고 다시 만들기에도 AI 입력에 넣는다 (migration 0010, B c2a5e0a, 목록 58번).<br>
+          · <code>essays.direction</code>, <code>suggestions.direction</code>: 칼럼은 남아 있지만 화면·AI 입력에 쓰지 않는다 (11/24 팀 결정, 목록 59번). 지울지는 B가 정한다.<br><br>
+          <b>규칙</b><br>
+          · 규칙 7 소재 삭제: [확인 대기] 해제 (B 1a6ff01).<br>
+          · 규칙 9 제안: 저장한 글에 쓴 소재는 후보에서 뺀다 (B 763fc1a).<br>
+          · 규칙 10 AI 질문: 그날 이미 첫 질문으로 쓴 질문은 그 사용자 목록에서 뒤로 (C 63b51cd).<br>
+          · 규칙 11 생성 입력: 방향 → 요청사항.<br>
+          · 규칙 19 하루 한도: 시연 계정 500.<br><br>
+          <b>실제 DB 확인 (11/25, Supabase 대시보드, 읽기만)</b><br>
+          · public 테이블 15개, 칼럼 수가 migration 0001~0010과 모두 같다.<br>
+          · 마이그레이션 기록에는 <code>20261118000009_ai_usage</code>까지만 있다. <code>20261121000010_essay_request</code>는 기록 없이 적용된 것으로 보인다 (칼럼은 있음). <code>supabase db push</code> 전에 B가 기록을 맞출지 정한다.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">Rowflow ERD · 소재추가 v9 · 3/4</div>
+</section>
+
+<!-- 4. 데이터 규칙 -->
+<section class="page" id="p4">
+  <h2>데이터 규칙</h2>
+  <div class="rules">
+    <div class="rule"><b>1. 버전 번호</b>AI 처음 결과 = 초안(version_no 0). 이후 사용자가 저장할 때마다 v1, v2…. 직접 쓴 글은 첫 저장이 v1. 버전 하나를 지울 수 있다. 초안과 마지막 남은 버전은 지울 수 없다 (409 version_not_deletable). 번호는 다시 매기지 않는다. 새 버전 = max(version_no) + 1.</div>
+    <div class="rule"><b>2. 원본 고정</b>records.status = saved가 되면 본문을 바꿀 수 없다 (서버·DB 트리거에서 막음).</div>
+    <div class="rule"><b>3. 분석 응답</b>응답의 요청 번호가 records.latest_analysis_request_id와 같고, ai_requests.status = running이고, 요청 시작이 users.data_cleared_at 이후일 때만 저장. 60초가 지나면 timeout (expire_ai_requests, 매분).</div>
+    <div class="rule"><b>4. 확인 대기</b>original_kept_at이 없고 보관 확정된 소재가 없는 저장된 기록 중 analysis_status가 analyzing·done(보관 전 후보)·empty·failed인 것. M120 보관 전 화면 더보기와 M110 카드 [⋯]에서 기록 삭제(규칙 6).</div>
+    <div class="rule"><b>5. 원본만 보관 목록</b>original_kept_at이 있고 보관 확정된 소재가 없는 기록. 소재 없음 화면에서 [새로 기록하기]/[새 대화 시작하기]를 누르면 기존 기록에 original_kept_at을 기록한다.</div>
+    <div class="rule"><b>6. 기록 삭제</b>보관 확정된 소재가 없는 원본만. 실제 삭제: records·qna_messages·확정 전 materials·관련 ai_requests. events.record_id는 비움. 확정 소재가 있으면 409 material_confirmed, 삭제된 소재면 409 material_deleted.</div>
+    <div class="rule"><b>7. 소재 삭제</b>글에 쓴 소재(essay_materials 연결, 직접 쓰기 임시 저장 포함): deleted_at만 기록 (논리 삭제). 기존 글에는 '삭제된 소재'로 표시하고 원본은 남는다. 글에 쓰지 않은 소재: records 행을 지워 materials·material_topics·qna_messages·관련 ai_requests까지 실제 삭제. 응답 200 + record_deleted. <span class="chg">v9: 확정 (B 1a6ff01, 목록 33번).</span> 두 경우 모두 그 주제의 제안을 다시 계산하고, 삭제된 소재가 든 생성 요청은 막는다 (409 material_not_available / material_not_found).</div>
+    <div class="rule"><b>8. 보관 확정</b>materials.confirmed_at이 있어야 고르기·관련 추천·제안·사용 횟수에 들어간다.</div>
+    <div class="rule"><b>9. 제안</b>(user_id, topic_id)당 1개. 같은 주제에 서로 다른 기록의 보관 확정 소재가 suggest_min_records(3) 이상이면 계산. <span class="chg">v9: 저장한 글(essays.status = saved)에 쓴 소재는 후보에서 빼고 남은 소재로 다시 계산한다. 임시 저장 글은 세지 않는다. 글을 저장·삭제하면 그 소재들의 주제를 다시 계산 (B 763fc1a, 목록 62번).</span> basis_hash = 소재마다 (id + updated_at). 같으면 AI를 부르지 않음. 제안 AI가 direction을 만들어도 화면에 쓰지 않음. 제안 계산은 하루 한도(규칙 19)에서 뺀다 [확인 대기: 팀, 29번].</div>
+    <div class="rule"><b>10. AI 질문</b>첫 질문은 답변 필수, 바꿀 수 없음 (409 first_question_not_replaceable, 첫 답변 전에는 1/30·2/30…로 넘김). <span class="chg">v9: 그날 공통 질문 30개의 순서는 그대로 두고, 이 사용자가 그날 이미 첫 질문으로 쓴 질문은 뒤로 보낸다 (C 63b51cd, 목록 63번).</span> [소재로 저장]은 답변 2개부터. [다른 질문 보기] 대화당 6회 = is_replaced = true 행 수. 답변 7개가 차면 마무리.</div>
+    <div class="rule"><b>11. 에세이 생성 입력</b>고른 소재의 제목·요약·근거 + 원본(소재당 1,500자), <span class="chg">요청사항(essays.request, 선택 200자)</span>, 문체·길이. 다시 만들기는 지금 본문 + 삭제되지 않은 소재 + <span class="chg">처음 요청사항</span> + 문체·길이. <span class="chg">v9: direction은 받아도 AI 입력에 넣지 않는다 (11/24).</span> 보낸 내용을 generation_input에 그대로 남김.</div>
+    <div class="rule"><b>12. 저장 중복·AI 결과</b>같은 save_token은 한 번만 저장 (두 번째는 200 + 기존 결과). 다시 만든 결과를 저장하면 ai_requests.result를 비운다. 바탕 버전이 지워졌으면 404 version_not_found.</div>
+    <div class="rule"><b>13. 글 제목</b>essay_versions.title이 기준. essays.title은 최신 버전 제목의 사본. 버전을 지우면 남은 최신 버전 제목으로 다시 맞춘다.</div>
+    <div class="rule"><b>14. 모든 기록 삭제</b>events·essays(버전·연결)·suggestions(연결)·records(문답·소재·주제 연결)·ai_requests를 지우고 users.data_cleared_at 기록 (clear_user_data). users 행과 ai_consent_at, ai_usage는 남김.</div>
+    <div class="rule"><b>15. 1달 정리</b>last_seen_at 후 1달이 지나면 위와 같은 범위로 정리 (cleanup_inactive_users, 매일 UTC 19:00).</div>
+    <div class="rule"><b>16. 임시 저장·진행 중</b>records는 type별 draft 1개·active 1개 (부분 유일 인덱스). essays는 직접 쓰기 draft 1개. active = 진행 중 AI 문답, 1시간 지나면 지움. 이어 쓰기는 [임시 저장] 때 checkpoint를 남기고 되돌릴 때 그 뒤 행·AI 요청을 지움.</div>
+    <div class="rule"><b>17. RLS</b>모든 테이블은 user_id = auth.uid()인 행만 읽기·쓰기. 브라우저에서 테이블에 직접 접근하지 않고 API(app_user)로만. topics·daily_questions는 읽기만.</div>
+    <div class="rule"><b>18. 상태 값 타입</b>text + CHECK (B 구현으로 확정).</div>
+    <div class="rule"><b>19. 하루 AI 한도</b>ai_usage(user_id, day).calls. 기본 한도 50 (ai_daily_limit). <span class="chg">v9: 시연 계정(demo_user_ids)은 500 (ai_daily_limit_demo, 목록 61번).</span> 넘으면 429 daily_limit. 사용자 동작 1번 = 1회. 길이 자동 재요청·제안 계산은 세지 않음.</div>
+  </div>
+  <h2 style="margin-top:10px;font-size:17px">최소 사용 이벤트 (events.name)</h2>
+  <table class="ev">
+    <tr><th>이름</th><th>행동</th><th>언제 기록</th></tr>
+    <tr><td>record_started</td><td>기록 시작</td><td>자유 기록·AI 질문 화면 진입마다 1회 (record_type 필수)</td></tr>
+    <tr><td>record_saved</td><td>기록 저장</td><td>[소재로 저장] (서버)</td></tr>
+    <tr><td>material_confirmed</td><td>소재 보관 확정</td><td>[소재함에 보관] (서버)</td></tr>
+    <tr><td>writing_started</td><td>글쓰기 시작</td><td>직접 쓰기 편집기 진입 / [초안 만들기] 첫 클릭</td></tr>
+    <tr><td>suggestion_shown</td><td>제안 노출</td><td>홈 카드·N130이 보였을 때 (placement 필수)</td></tr>
+    <tr><td>suggestion_selected</td><td>제안 선택</td><td>[이 주제로 글쓰기]</td></tr>
+    <tr><td>essay_saved</td><td>사용자 글 저장</td><td>직접 쓰기 첫 저장, 다시 만든 결과 저장, 새 버전, 덮어쓰기 (서버). 초안 자동 보관 제외</td></tr>
+    <tr><td>body_shared</td><td>공유</td><td>[복사] / [다른 앱으로 공유] 성공 (share_method). <span style="background:var(--new)">v9: [Threads에 공유]는 기록하지 않음</span></td></tr>
+  </table>
+  <p class="sub" style="margin-top:8px">화면 전용 5개(record_started, writing_started, suggestion_shown, suggestion_selected, body_shared)는 POST /events (204). 서버 전용 3개는 프론트에서 보내지 않음. 실패해도 재전송하지 않음. 본문·토큰은 넣지 않음.</p>
+  <div class="foot">Rowflow ERD · 소재추가 v9 · 4/4</div>
+</section>
+
+<script>
+// [key, name, type, 설명, flag]  flag: 'new' | 'unused'
+const C = { user: 'var(--c-user)', rec: 'var(--c-rec)', mat: 'var(--c-mat)', sug: 'var(--c-sug)', ess: 'var(--c-ess)', sys: 'var(--c-sys)' };
+const T = {
+  users: { ko: '이름 없는 사용자', c: C.user, cols: [
+    ['PK', 'id', 'uuid', 'Supabase 로그인 id (auth.users). 익명 또는 시연 계정'],
+    ['', 'created_at', 'timestamptz', '가입 시각'],
+    ['', 'ai_consent_at', 'timestamptz', 'AI 사용 동의 시각'],
+    ['', 'last_seen_at', 'timestamptz', '마지막 접속 (GET /me에서 갱신, 1달 정리 기준)'],
+    ['', 'data_cleared_at', 'timestamptz', '마지막 모든 기록 삭제 시각 (늦은 AI 응답 차단)'] ] },
+  records: { ko: '원본 기록', c: C.rec, cols: [
+    ['PK', 'id', 'uuid', '기록 번호'],
+    ['FK', 'user_id', 'uuid', 'users.id'],
+    ['', 'type', 'text', 'free / qna'],
+    ['', 'title', 'text', '제목 (선택)'],
+    ['', 'body', 'text', '자유 기록 본문'],
+    ['', 'status', 'text', 'draft / active / saved'],
+    ['', 'analysis_status', 'text', 'none / analyzing / done / empty / failed'],
+    ['FK', 'latest_analysis_request_id', 'bigint', '최신 분석 요청 (그 결과만 저장)'],
+    ['', 'original_kept_at', 'timestamptz', '원본만 보관 시각'],
+    ['', 'created_at', 'timestamptz', '만든 시각'],
+    ['', 'saved_at', 'timestamptz', '[소재로 저장] 시각'],
+    ['', 'updated_at', 'timestamptz', '마지막 활동 (1시간 규칙)'],
+    ['', 'checkpoint_seq', 'int', '이어 쓰기 기준점: 마지막 seq'],
+    ['', 'checkpoint_pending_id', 'uuid', '기준점에서 답을 기다리던 질문'],
+    ['', 'checkpoint_at', 'timestamptz', '기준점 시각 (뒤 AI 요청 정리)'],
+    ['UK', 'save_token', 'uuid', '자유 기록 중복 저장 막기 (user_id와 유일)'] ] },
+  qna_messages: { ko: 'AI 문답', c: C.rec, cols: [
+    ['PK', 'id', 'uuid', '질문 번호'],
+    ['FK UK', 'record_id', 'uuid', 'records.id'],
+    ['UK', 'seq', 'int', '순서'],
+    ['', 'question', 'text', '질문'],
+    ['', 'question_source', 'text', 'daily / followup'],
+    ['FK', 'daily_question_id', 'uuid', '오늘의 질문 번호'],
+    ['', 'answer', 'text', '답변'],
+    ['', 'is_replaced', 'boolean', '[다른 질문 보기]로 바뀐 질문'] ] },
+  daily_questions: { ko: '오늘의 질문', c: C.rec, cols: [
+    ['PK', 'id', 'uuid', '번호'],
+    ['UK', 'question_date', 'date', '날짜'],
+    ['UK', 'seq', 'int', '1~30'],
+    ['', 'question', 'text', '공통 질문 (보여 주는 순서는 사용자별, 규칙 10)'] ] },
+  materials: { ko: '소재', c: C.mat, cols: [
+    ['PK', 'id', 'uuid', '소재 번호'],
+    ['FK', 'user_id', 'uuid', 'users.id'],
+    ['FK UK', 'record_id', 'uuid', 'records.id (기록당 1개)'],
+    ['', 'title', 'text', '제목'],
+    ['', 'summary', 'text', '요약 한 줄'],
+    ['', 'evidence', 'text', '근거 문장 (원문에 있는 부분)'],
+    ['', 'keywords', 'text[]', '키워드 (10개 이하)'],
+    ['', 'origin', 'text', 'ai / manual'],
+    ['', 'confirmed_at', 'timestamptz', '보관 확정 시각'],
+    ['', 'user_edited_at', 'timestamptz', '사용자가 고친 시각'],
+    ['', 'deleted_at', 'timestamptz', '논리 삭제 시각 (글에 쓴 소재만)'],
+    ['', 'created_at', 'timestamptz', '만든 시각'],
+    ['', 'updated_at', 'timestamptz', '마지막 수정 (제안 basis_hash)'] ] },
+  material_topics: { ko: '소재-주제 연결', c: C.mat, cols: [
+    ['PK FK', 'material_id', 'uuid', 'materials.id'],
+    ['PK FK', 'topic_id', 'smallint', 'topics.id'] ] },
+  topics: { ko: '주제', c: C.mat, cols: [
+    ['PK', 'id', 'smallint', '주제 번호'],
+    ['UK', 'name', 'text', '주제 이름 (10개)'],
+    ['', 'sort_order', 'smallint', '순서'] ] },
+  suggestions: { ko: '글쓰기 제안', c: C.sug, cols: [
+    ['PK', 'id', 'uuid', '제안 번호'],
+    ['FK UK', 'user_id', 'uuid', 'users.id'],
+    ['FK UK', 'topic_id', 'smallint', 'topics.id (사용자·주제당 1개)'],
+    ['', 'status', 'text', 'computing / ready / none / failed'],
+    ['', 'title', 'text', '제안 제목'],
+    ['', 'direction', 'text', '쓰지 않음 (11/24). 칼럼만 남음', 'unused'],
+    ['', 'reason', 'text', '추천 이유'],
+    ['', 'basis_hash', 'text', '소재 번호 + updated_at (같으면 재사용)'],
+    ['', 'computed_at', 'timestamptz', '계산 시각'] ] },
+  suggestion_materials: { ko: '제안-소재 연결', c: C.sug, cols: [
+    ['PK FK', 'suggestion_id', 'uuid', 'suggestions.id'],
+    ['PK FK', 'material_id', 'uuid', 'materials.id'],
+    ['', 'seq', 'int', '순서'] ] },
+  essays: { ko: '글', c: C.ess, cols: [
+    ['PK', 'id', 'uuid', '글 번호'],
+    ['FK', 'user_id', 'uuid', 'users.id'],
+    ['FK', 'suggestion_id', 'uuid', '제안에서 왔을 때'],
+    ['', 'method', 'text', 'direct / ai'],
+    ['', 'status', 'text', 'draft / saved'],
+    ['', 'title', 'text', '최신 버전 제목 사본'],
+    ['', 'draft_body', 'text', '직접 쓰기 임시 저장 본문'],
+    ['', 'direction', 'text', '쓰지 않음 (11/24). 칼럼만 남음', 'unused'],
+    ['', 'created_at', 'timestamptz', '만든 시각'],
+    ['', 'updated_at', 'timestamptz', '최근 수정 (내 서재 순서)'],
+    ['', 'request ★', 'text', '사용자 요청사항 (선택, 200자). AI 초안·다시 만들기 입력 (0010)', 'new'] ] },
+  essay_materials: { ko: '글-소재 연결', c: C.ess, cols: [
+    ['PK FK', 'essay_id', 'uuid', 'essays.id'],
+    ['PK FK', 'material_id', 'uuid', 'materials.id'],
+    ['', 'seq', 'int', '순서'] ] },
+  essay_versions: { ko: '글 버전', c: C.ess, cols: [
+    ['PK', 'id', 'uuid', '버전 번호'],
+    ['FK UK', 'essay_id', 'uuid', 'essays.id'],
+    ['UK', 'version_no', 'int', '0 = 초안, 1 = v1 …'],
+    ['', 'kind', 'text', 'ai_first / ai_regen / direct_first / direct_new'],
+    ['', 'title', 'text', '제목'],
+    ['', 'body', 'text', '본문'],
+    ['', 'char_count', 'int', '글자 수 (본문, 공백 포함)'],
+    ['', 'style', 'text', '감성적 / 담백함'],
+    ['', 'length', 'text', 'short / long'],
+    ['', 'regen_count', 'int', '이어서 몇 번째 결과'],
+    ['FK', 'based_on_version_id', 'uuid', '바탕 버전 (지우면 비움)'],
+    ['FK', 'ai_request_id', 'bigint', 'AI 요청'],
+    ['', 'generation_input', 'jsonb', 'AI에 보낸 입력 사본 (요청사항 포함)'],
+    ['UK', 'save_token', 'uuid', '중복 저장 막기'],
+    ['', 'created_at', 'timestamptz', '만든 시각'],
+    ['', 'updated_at', 'timestamptz', '덮어쓰기 시각'] ] },
+  ai_requests: { ko: 'AI 요청 기록', c: C.sys, cols: [
+    ['PK', 'id', 'bigint', '요청 번호'],
+    ['FK', 'user_id', 'uuid', 'users.id'],
+    ['', 'kind', 'text', 'question / extract / suggest / draft / regen'],
+    ['', 'target_type', 'text', 'record / suggestion / essay'],
+    ['', 'target_id', 'uuid', '대상 번호'],
+    ['', 'status', 'text', 'running / ok / failed / timeout / discarded'],
+    ['', 'result', 'jsonb', '저장 전 결과 (저장하면 비움)'],
+    ['', 'started_at', 'timestamptz', '시작'],
+    ['', 'finished_at', 'timestamptz', '끝'],
+    ['', 'failure_reason', 'text', '실패 이유'],
+    ['', 'input_tokens', 'int', '입력 토큰'],
+    ['', 'output_tokens', 'int', '출력 토큰'] ] },
+  ai_usage: { ko: '하루 AI 사용 횟수', c: C.sys, cols: [
+    ['PK FK', 'user_id', 'uuid', 'users.id'],
+    ['PK', 'day', 'date', '날짜 (한국 시간)'],
+    ['', 'calls', 'int', '그날 호출 수 (한도 기본 50, 시연 계정 500). 모든 기록 지우기 때 남김'] ] },
+  events: { ko: '최소 사용 이벤트', c: C.sys, cols: [
+    ['PK', 'id', 'bigint', '번호'],
+    ['FK', 'user_id', 'uuid', 'users.id'],
+    ['', 'name', 'text', '이벤트 8종'],
+    ['', 'occurred_at', 'timestamptz', '발생 시각'],
+    ['FK', 'record_id', 'uuid', '관련 기록 (기록 삭제 때 비움)'],
+    ['FK', 'essay_id', 'uuid', '관련 글'],
+    ['FK', 'suggestion_id', 'uuid', '관련 제안'],
+    ['', 'write_mode', 'text', 'direct / ai'],
+    ['', 'material_count', 'int', '선택 소재 수 (0~100)'],
+    ['', 'entry_path', 'text', 'home / materials / material_detail / suggestion / no_material'],
+    ['', 'share_method', 'text', 'copy / share_sheet (body_shared). Threads는 기록 안 함'],
+    ['', 'record_type', 'text', 'free / qna (record_started)'],
+    ['', 'placement', 'text', 'home / suggestion_detail (suggestion_shown)'] ] },
+};
+
+// 관계도 배치 (px)
+const POS = {
+  users: [52, 150], ai_usage: [52, 330], daily_questions: [52, 470], topics: [52, 620],
+  records: [330, 150], qna_messages: [330, 500],
+  ai_requests: [610, 150], materials: [610, 440],
+  material_topics: [890, 150], suggestions: [890, 250], suggestion_materials: [890, 470],
+  essays: [1150, 150], essay_materials: [1150, 380], essay_versions: [1150, 490],
+  events: [610, 760],
+};
+// [child, childCol, parent, parentCol]
+const FK = [
+  ['records', 'user_id', 'users', 'id'], ['materials', 'user_id', 'users', 'id'], ['suggestions', 'user_id', 'users', 'id'],
+  ['essays', 'user_id', 'users', 'id'], ['ai_requests', 'user_id', 'users', 'id'], ['ai_usage', 'user_id', 'users', 'id'],
+  ['events', 'user_id', 'users', 'id'],
+  ['records', 'latest_analysis_request_id', 'ai_requests', 'id'],
+  ['qna_messages', 'record_id', 'records', 'id'], ['qna_messages', 'daily_question_id', 'daily_questions', 'id'],
+  ['materials', 'record_id', 'records', 'id'],
+  ['material_topics', 'material_id', 'materials', 'id'], ['material_topics', 'topic_id', 'topics', 'id'],
+  ['suggestions', 'topic_id', 'topics', 'id'],
+  ['suggestion_materials', 'suggestion_id', 'suggestions', 'id'], ['suggestion_materials', 'material_id', 'materials', 'id'],
+  ['essays', 'suggestion_id', 'suggestions', 'id'],
+  ['essay_materials', 'essay_id', 'essays', 'id'], ['essay_materials', 'material_id', 'materials', 'id'],
+  ['essay_versions', 'essay_id', 'essays', 'id'], ['essay_versions', 'based_on_version_id', 'essay_versions', 'id'],
+  ['essay_versions', 'ai_request_id', 'ai_requests', 'id'],
+  ['events', 'record_id', 'records', 'id'], ['events', 'essay_id', 'essays', 'id'], ['events', 'suggestion_id', 'suggestions', 'id'],
+];
+
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const diagram = document.getElementById('diagram');
+for (const [name, t] of Object.entries(T)) {
+  const [x, y] = POS[name];
+  const rows = t.cols.map(([k, n, ty, , f]) =>
+    `<div class="row ${k.includes('PK') ? 'pk' : ''} ${f || ''}" data-col="${n.replace(' ★', '')}"><span class="k">${k}</span><span class="n">${esc(n)}</span><span class="t">${ty}</span></div>`).join('');
+  diagram.insertAdjacentHTML('beforeend',
+    `<div class="card" id="card-${name}" style="left:${x}px;top:${y}px"><div class="hd" style="background:${t.c}">${name}<small>${t.ko}</small></div>${rows}</div>`);
+}
+
+function rowBox(table, col) {
+  const page = document.getElementById('p1').getBoundingClientRect();
+  const el = document.querySelector(`#card-${table} .row[data-col="${col}"]`);
+  const r = el.getBoundingClientRect();
+  return { l: r.left - page.left, r: r.right - page.left, y: r.top - page.top + r.height / 2 };
+}
+const svg = document.getElementById('wires');
+let paths = '';
+for (const [child, ccol, parent, pcol] of FK) {
+  const c = rowBox(child, ccol), p = rowBox(parent, pcol);
+  const dashed = parent === 'users';
+  const stroke = dashed ? '#9a9a9a' : '#555';
+  let x1, x2, d, dir1, dir2;
+  if (child === parent) {           // self reference: loop on the right
+    x1 = p.r; x2 = c.r; dir1 = 1; dir2 = 1;
+    d = `M${x1} ${p.y} C${x1 + 60} ${p.y}, ${x2 + 60} ${c.y}, ${x2} ${c.y}`;
+  } else if (c.l > p.r) {           // child to the right
+    x1 = p.r; x2 = c.l; dir1 = 1; dir2 = -1;
+    const m = Math.max(40, (x2 - x1) / 2);
+    d = `M${x1} ${p.y} C${x1 + m} ${p.y}, ${x2 - m} ${c.y}, ${x2} ${c.y}`;
+  } else if (c.r < p.l) {           // child to the left
+    x1 = p.l; x2 = c.r; dir1 = -1; dir2 = 1;
+    const m = Math.max(40, (x1 - x2) / 2);
+    d = `M${x1} ${p.y} C${x1 - m} ${p.y}, ${x2 + m} ${c.y}, ${x2} ${c.y}`;
+  } else {                          // same column: bend on the right side
+    x1 = p.r; x2 = c.r; dir1 = 1; dir2 = 1;
+    d = `M${x1} ${p.y} C${x1 + 45} ${p.y}, ${x2 + 45} ${c.y}, ${x2} ${c.y}`;
+  }
+  paths += `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.1" ${dashed ? 'stroke-dasharray="4 3"' : ''}/>`;
+  // parent end: bar
+  const bx = x1 + dir1 * 7;
+  paths += `<line x1="${bx}" y1="${p.y - 5}" x2="${bx}" y2="${p.y + 5}" stroke="${stroke}" stroke-width="1.4"/>`;
+  // child end: crow's foot
+  const fx = x2 + dir2 * 9;
+  paths += `<path d="M${fx} ${c.y} L${x2} ${c.y - 5} M${fx} ${c.y} L${x2} ${c.y} M${fx} ${c.y} L${x2} ${c.y + 5}" stroke="${stroke}" stroke-width="1.1" fill="none"/>`;
+}
+svg.innerHTML = paths;
+
+// 테이블 정의
+function defTable(name) {
+  const t = T[name];
+  const rows = t.cols.map(([k, n, ty, note, f]) =>
+    `<tr class="${f || ''}"><td>${esc(n)}</td><td>${ty}</td><td class="key">${k}</td><td>${esc(note)}</td></tr>`).join('');
+  return `<div class="tbl" style="--c:${t.c}"><h3>${name}<small>${t.ko}</small></h3><table><colgroup><col style="width:34%"><col style="width:17%"><col style="width:11%"><col></colgroup><tr><th>컬럼</th><th>타입</th><th>키</th><th>설명</th></tr>${rows}</table></div>`;
+}
+const LAYOUT = {
+  c1: ['users', 'records', 'qna_messages'],
+  c2: ['materials', 'material_topics', 'topics', 'suggestions', 'suggestion_materials'],
+  c3: ['essays', 'essay_materials', 'essay_versions'],
+  c4: ['daily_questions', 'ai_requests', 'ai_usage'],
+  c5: ['events'],
+};
+for (const [id, names] of Object.entries(LAYOUT)) document.getElementById(id).innerHTML = names.map(defTable).join('');
+</script>
+</body>
+</html>
